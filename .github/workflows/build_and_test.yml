@@ -1,0 +1,203 @@
+name: Build and test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/scripts/build_llvm.sh'
+      - '.github/workflows/build_and_test.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+  pull_request:
+    branches: [main]
+    types: [assigned, opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/scripts/build_llvm.sh'
+      - '.github/workflows/build_and_test.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sanity-check:
+    name: Sanity check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get CUDA Quantum
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          submodules: "false"
+
+      - name: Set git safe
+        run: |
+          git config --global --add safe.directory $PWD
+
+      # Choose the commit to diff against for linting. This workflow is
+      # triggered on both pushes and pull requests to main. Hence, we have to
+      # find out if the pull request target branch is set---it will only be on
+      # the PR triggered flow). If it's not, then compare against the last commit.
+      - name: Choose base commit
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -z "$BASE_REF" ]; then
+            DIFF_COMMIT_NAME="HEAD^"
+          else
+            DIFF_COMMIT_NAME="$PR_BASE"
+          fi
+          echo "DIFF_COMMIT_NAME=$DIFF_COMMIT_NAME" >> $GITHUB_ENV
+
+      # We did a shallow clone, and thus we need to make sure to fetch the base
+      # commit.
+      - name: Fetch base commit
+        run: |
+          if echo "$DIFF_COMMIT_NAME" | grep -q HEAD; then
+            DIFF_COMMIT_SHA=$(git rev-parse $DIFF_COMMIT_NAME)
+          else
+            git fetch --recurse-submodules=no origin $DIFF_COMMIT_NAME
+            DIFF_COMMIT_SHA=$(git rev-parse origin/$DIFF_COMMIT_NAME)
+          fi
+          echo "DIFF_COMMIT_SHA=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
+
+      - name: clang-format
+        run: |
+          git clang-format-14 $DIFF_COMMIT_SHA -- ':!:tpls/*' ':!:test'
+          git diff --ignore-submodules > clang-format.patch
+          if [ -s clang-format.patch ]; then
+            echo "Clang-format found formatting problems in the following " \
+                  "files. See diff in the clang-format.patch artifact."
+            git diff --ignore-submodules --name-only
+            git checkout .
+            exit 1
+          fi
+          echo "Clang-format found no formatting problems"
+          exit 0
+
+      - name: Upload format patches
+        uses: actions/upload-artifact@v3
+        continue-on-error: true
+        if: ${{ failure() }}
+        with:
+          name: clang-format-patch
+          path: clang-*.patch
+
+  build-and-test:
+    name: Build and test
+    needs: sanity-check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler:
+          - cc: clang-14
+            cxx: clang++-14
+            mode: Debug
+          - cc: gcc-11
+            cxx: g++-11
+            mode: Release
+
+    steps:
+      - name: Install ninja
+        uses: llvm/actions/install-ninja@main
+
+      - name: Get CUDA Quantum
+        uses: actions/checkout@v3
+
+      - name: Set git safe
+        run: |
+          git config --global --add safe.directory $PWD
+
+      - name: Get LLVM hash
+        id: get-llvm-hash
+        run: echo "hash=$(git rev-parse @:./tpls/llvm)" >> $GITHUB_OUTPUT
+
+      - name: Get LLVM configure hash
+        id: get-llvm-config-hash
+        run: echo "hash=$(md5sum ./scripts/ci_build_llvm.sh | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Try restoring LLVM cache
+        id: restore-llvm-cache
+        uses: actions/cache/restore@v3
+        with:
+          path: |
+            tpls/llvm/build/bin/llvm-lit
+            tpls/llvm/llvm/utils/lit
+            tpls/llvm/install
+          key: ${{ runner.os }}-llvm-${{ steps.get-llvm-hash.outputs.hash }}-${{ steps.get-llvm-config-hash.outputs.hash }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }}
+
+      - name: Prepare LLVM (re)build
+        if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+        # Install LLD and free some storage space by deleting things we don't
+        # need. (https://github.com/actions/virtual-environments/issues/2840)
+        run: |
+          apt-fast install -y --no-install-recommends lld
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: (Re)build LLVM
+        if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+        run: bash .github/workflows/scripts/build_llvm.sh Release ${{ matrix.compiler.cc }} ${{ matrix.compiler.cxx }}
+
+      - name: Save LLVM cache
+        if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: |
+            tpls/llvm/build/bin/llvm-lit
+            tpls/llvm/llvm/utils/lit
+            tpls/llvm/install
+          key: ${{ steps.restore-llvm-cache.outputs.cache-primary-key }}
+
+      - name: CCache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 500M
+          key: ${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }}
+          variant: sccache
+          save: ${{ github.ref_name == 'main' }}
+          append-timestamp: false
+
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.compiler.mode }} \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DMLIR_DIR=`pwd`/../tpls/llvm/install/lib/cmake/mlir \
+            -DLLVM_DIR=`pwd`/../tpls/llvm/install/lib/cmake/llvm \
+            -DLLVM_EXTERNAL_LIT=`pwd`/../tpls/llvm/build/bin/llvm-lit \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DCUDAQ_ENABLE_PYTHON=ON
+          ninja
+
+      - name: Run tests
+        run: |
+          # Python tests requires numpy
+          pip install numpy
+          ctest --output-on-failure --test-dir build
+

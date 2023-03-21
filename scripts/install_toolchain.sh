@@ -8,7 +8,7 @@
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
 
-# This script installs the specified C/C++ toolchain, 
+# This script installs the specified C/C++ toolchain,
 # and exports the CC and CXX environment variables.
 #
 # Usage:
@@ -16,8 +16,8 @@
 # -or-
 #   source scripts/install_toolchain.sh -t <toolchain> -e path/to/dir
 #
-# where <toolchain> cam be either gcc11, clang15, or llvm. 
-# The -e option creates a init_command.sh file in the given directory that 
+# where <toolchain> cam be either gcc11, clang15, or llvm.
+# The -e option creates a init_command.sh file in the given directory that
 # can be used to reinstall the same toolchain if needed.
 
 (return 0 2>/dev/null) && is_sourced=true || is_sourced=false
@@ -65,14 +65,14 @@ elif [ "$toolchain" = "llvm" ]; then
     LLVM_INSTALL_PREFIX=${LLVM_INSTALL_PREFIX:-/opt/llvm}
     if [ ! -f "$LLVM_INSTALL_PREFIX/bin/clang" ] || [ ! -f "$LLVM_INSTALL_PREFIX/bin/clang++" ] || [ ! -f "$LLVM_INSTALL_PREFIX/bin/ld.lld" ]; then
 
-        this_file_dir=`dirname "$(readlink -f "${BASH_SOURCE[0]}")"` # alternatively, we could pass the script path instead of llvm-toolchain        
+        this_file_dir=`dirname "$(readlink -f "${BASH_SOURCE[0]}")"` # alternatively, we could pass the script path instead of llvm-toolchain
         if [ ! -d "$LLVM_SOURCE" ]; then
             mkdir -p "$HOME/.llvm_project"
             llvm_tmp_dir=`mktemp -d -p "$HOME/.llvm_project"` && LLVM_SOURCE="$llvm_tmp_dir"
             apt-get update && apt-get install -y --no-install-recommends git
             git clone -b main --single-branch --depth 1 https://github.com/llvm/llvm-project "$LLVM_SOURCE"
         fi
-        
+
         temp_install_if_command_unknown ninja ninja-build
         temp_install_if_command_unknown cmake cmake
         temp_install_if_command_unknown gcc gcc
@@ -96,7 +96,7 @@ elif [ "$toolchain" = "llvm" ]; then
         created_ld_sym_link=$?
         if [ "$created_ld_sym_link" = "" ] || [ ! "$created_ld_sym_link" -eq "0" ]; then
             echo "Failed to configure a linker. The lld linker can be used by adding the linker flag --ld-path=\"$LLVM_INSTALL_PREFIX/bin/ld.lld\"."
-        else 
+        else
             echo "Setting lld linker as the default linker."
         fi
     fi
@@ -110,11 +110,11 @@ else
 fi
 
 if [ -x "$(command -v "$CC")" ] && [ -x "$(command -v "$CXX")" ]; then
-    apt-get autoremove -y --purge && apt-get clean && rm -rf /var/lib/apt/lists/* 
+    apt-get autoremove -y --purge && apt-get clean && rm -rf /var/lib/apt/lists/*
     export CC="$CC" && export CXX="$CXX"
     echo "Installed $toolchain toolchain."
-    
-    if [ "$export_dir" != "" ]; then 
+
+    if [ "$export_dir" != "" ]; then
         mkdir -p "$export_dir"
         this_file=`readlink -f "${BASH_SOURCE[0]}"`
         cat "$this_file" > "$export_dir/install_toolchain.sh"
