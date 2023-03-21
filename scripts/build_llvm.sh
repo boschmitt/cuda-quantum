@@ -58,7 +58,6 @@ echo "Configured C++ compiler: $CXX"
 # Prepare the build directory
 mkdir -p "$LLVM_INSTALL_PREFIX"
 mkdir -p "$llvm_source/build" && cd "$llvm_source/build" && rm -rf *
-mkdir -p logs && rm -rf logs/* 
 
 # Generate CMake files
 echo "Preparing LLVM build..."
@@ -69,15 +68,14 @@ cmake -G Ninja ../llvm \
   -DCMAKE_BUILD_TYPE=$build_configuration \
   -DLLVM_ENABLE_ASSERTIONS=ON \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DLLVM_INSTALL_UTILS=TRUE 2> logs/cmake_error.txt 1> logs/cmake_output.txt
+  -DLLVM_INSTALL_UTILS=TRUE
 
 # Build and install clang in a folder
 echo "Building LLVM with configuration $build_configuration..."
-echo "The progress of the build is being logged to `pwd`/logs/ninja_output.txt."
-ninja install 2> logs/ninja_error.txt 1> logs/ninja_output.txt
+ninja install
 status=$?
 if [ "$status" = "" ] || [ ! "$status" -eq "0" ]; then
-  echo "Build failed. Please check the files in the `pwd`/logs directory."
+  echo "Build failed."
   cd "$working_dir" && if $is_sourced; then return 1; else exit 1; fi
 else
   cp bin/llvm-lit "$LLVM_INSTALL_PREFIX/bin/"
