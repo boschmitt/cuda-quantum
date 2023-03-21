@@ -1,0 +1,125 @@
+name: Build and Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [assigned, opened, synchronize, reopened]
+    paths:
+      - '**.cpp'
+      - '**.h'
+      - '**/CMakeLists.txt'
+      - 'python/**'
+      - 'runtime/**'
+      - 'test/**'
+      - 'tpls/**'
+
+jobs:
+  # Sanity check (clang-format and python-format).
+  sanity-check:
+    name: Sanity Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get CUDA Quantum
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          submodules: "false"
+
+      - name: Set git safe
+        run: |
+          git config --global --add safe.directory $PWD
+
+      - name: Fetch base commit
+        continue-on-error: true
+        run: |
+          git fetch --recurse-submodules=no origin $DIFF_COMMIT_NAME
+          DIFF_COMMIT_SHA=$(git rev-parse origin/$DIFF_COMMIT_NAME)
+          echo "DIFF_COMMIT_SHA=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
+
+      - name: clang-format
+        run: |
+          git clang-format $DIFF_COMMIT_SHA
+          git diff --diff-filter=d --name-only $DIFF_COMMIT_SHA -- '*.cpp' '*.h' ':!:tpls/*' ':!:test' > clang-format.patch
+          if [ -s clang-format.patch ]; then
+            echo "Clang-format found formatting problems in the following " \
+                  "files. See diff in the clang-format.patch artifact."
+            git diff --diff-filter=d --name-only -- '*.cpp' '*.h' ':!:tpls/*' ':!:test'
+            git checkout .
+            exit 1
+          fi
+          echo "Clang-format found no formatting problems"
+          exit 0
+
+      - name: Upload format patches
+        uses: actions/upload-artifact@v3
+        continue-on-error: true
+        if: ${{ failure() }}
+        with:
+          name: clang-format-patch
+          path: clang-*.patch
+
+  build-and-test:
+    name: Build and Test
+    needs: sanity-check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler:
+          - cc: clang
+            cxx: clang++
+          - cc: gcc
+            cxx: g++
+
+    steps:
+      - name: Configure Environment
+        run:
+          - echo "LLVM_INSTALL_PREIX=$GITHUB_WORKSPACE/tpls/llvm/install" >> $GITHUB_ENV
+
+      - name: Get CUDA Quantum
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          submodules: "true"
+
+      - name: Set git safe
+        run: |
+          git config --global --add safe.directory $PWD
+
+      - name: Get LLVM hash
+        id: get-llvm-hash
+        run: echo "::set-output name=hash::$(git rev-parse @:./tpls/llvm)"
+
+      - name: Get workflow hash
+        id: get-workflow-hash
+        run: echo "::set-output name=hash::$(md5sum $GITHUB_WORKSPACE/.github/workflows/build_test.yml | awk '{print $1}')"
+
+      - name: Cache LLVM
+        id: cache-llvm
+        uses: actions/cache@v2
+        with:
+          path: |
+            tpls/llvm/build/bin/llvm-lit
+            tpls/llvm/install
+          key: ${{ runner.os }}-llvm-${{ steps.get-llvm-hash.outputs.hash }}-${{ steps.get-workflow-hash.outputs.hash }}-${{ matrix.compiler.cc }} 
+
+      - name: Rebuild and Install LLVM
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: scripts/build_llvm.sh
+
+      - name: Build and Test
+        run: |
+          mkdir build
+          cd build
+          cmake .. \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DMLIR_DIR=`pwd`/../tpls/llvm/install/lib/cmake/mlir \
+            -DLLVM_DIR=`pwd`/../tpls/llvm/install/lib/cmake/llvm \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx }} \
+            -DLLVM_EXTERNAL_LIT=`pwd`/../tpls/llvm/build/bin/llvm-lit \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja
+          ctest --output-on-failure --test-dir build
