@@ -10,6 +10,7 @@
 
 #include <cudaq.h>
 
+
 struct kernel_alpha {
   void operator()(cudaq::qubit &qb) __qpu__ {
     for (int i = 0; i < 4; ++i) {
