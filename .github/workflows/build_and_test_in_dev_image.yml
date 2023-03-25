@@ -1,0 +1,82 @@
+name: Build and test using dev image
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [assigned, opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/build_and_test_in_dev_image.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  run_ci:
+    name: Build and test in dev image
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [clang15, gcc11]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Get LLVM hash
+        id: get-llvm-hash
+        run: |
+          echo "hash=$(git rev-parse @:./tpls/llvm)" >> $GITHUB_OUTPUT
+
+      - name: Get dockerfile hash
+        id: get-dockerfile-hash
+        run: |
+          echo "hash=$(md5sum ./docker/build/devenv.Dockerfile | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Construct image cache key
+        id: image-cache-key
+        run: |
+          echo "key=dev-image-${{ steps.get-dockerfile-hash.outputs.hash }}-${{ steps.get-llvm-hash.outputs.hash }}-${{ matrix.toolchain }}" >> $GITHUB_OUTPUT
+
+      - name: Restore dev image
+        uses: actions/cache/restore@v3
+        with:
+          path: /tmp/dev-image.tar
+          key: ${{ steps.image-cache-key.outputs.key }}-tar
+          fail-on-cache-miss: true
+
+          # docker load -t dev-image --input /tmp/dev-image.tar
+      - name: Create container
+        run: |
+          docker image ls -a
+          cat /tmp/dev-image.tar | docker import --message "New image imported from tarball" - cuda-quantum:dev-image
+          docker image ls -a
+          docker build -t cuda-quantum-dev -f .devcontainer/Dockerfile . --build-arg workspace=. --build-arg destination=workspaces/cuda-quantum
+
+      - name: Build
+        uses: addnab/docker-run-action@v3
+        with:
+            image: cuda-quantum-dev
+            run: |
+                cd /workspaces/cuda-quantum
+                bash scripts/build_cudaq.sh -v
+
+      - name: Test
+        uses: addnab/docker-run-action@v3
+        with:
+            image: cuda-quantum-dev
+            run: |
+                cd /workspaces/cuda-quantum
+                ctest --output-on-failure --test-dir build -E ctest-nvqpp
+                /opt/llvm/bin/llvm-lit -v --param nvqpp_site_config=build/test/lit.site.cfg.py build/test
+
+
