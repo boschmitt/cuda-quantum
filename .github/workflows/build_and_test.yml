@@ -1,0 +1,164 @@
+name: Build and test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build_and_test.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+      # Ignore the paths that trigger the LLVM bump workflow
+      - '!.github/workflows/llvm_bump.yml'
+      - '!.github/actions/get-llvm-build/**'
+      - '!tpls/llvm/**'
+  pull_request:
+    branches: [main]
+    types: [assigned, opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/build_and_test.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+      # Ignore the paths that trigger the LLVM bump workflow
+      - '!.github/workflows/llvm_bump.yml'
+      - '!.github/actions/get-llvm-build/**'
+      - '!tpls/llvm/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  sanity-check:
+    name: Sanity check
+    runs-on: ubuntu-latest
+    container: ghcr.io/${{ github.repository }}-dev:gcc-11-latest
+    steps:
+      - name: Decompress LLVM build
+        run: tar --posix --use-compress-program=unzstd -C /opt -xf /llvm.tar.tzst
+
+      - name: Get code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          submodules: "false"
+
+      - name: Set git safe
+        run: git config --global --add safe.directory $PWD
+
+      # Choose the commit to diff against for linting. This workflow is
+      # triggered on both pushes and pull requests to main. Hence, we have to
+      # find out if the pull request target branch is set---it will only be on
+      # the PR triggered flow). If it's not, then compare against the last commit.
+      - name: Choose base commit
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -z "$BASE_REF" ]; then
+            DIFF_COMMIT_NAME="HEAD^"
+          else
+            DIFF_COMMIT_NAME="$PR_BASE"
+          fi
+          echo "DIFF_COMMIT_NAME=$DIFF_COMMIT_NAME" >> $GITHUB_ENV
+
+      # We did a shallow clone, and thus we need to make sure to fetch the base
+      # commit.
+      - name: Fetch base commit
+        run: |
+          if echo "$DIFF_COMMIT_NAME" | grep -q HEAD; then
+            DIFF_COMMIT_SHA=$(git rev-parse $DIFF_COMMIT_NAME)
+          else
+            git fetch --recurse-submodules=no origin $DIFF_COMMIT_NAME
+            DIFF_COMMIT_SHA=$(git rev-parse origin/$DIFF_COMMIT_NAME)
+          fi
+          echo "DIFF_COMMIT_SHA=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
+
+      - name: clang-format
+        run: |
+          cp /opt/llvm/bin/git-clang-format /usr/bin/
+          git clang-format $DIFF_COMMIT_SHA -- ':!:tpls/*' ':!:test'
+          git diff --ignore-submodules > clang-format.patch
+          if [ -s clang-format.patch ]; then
+            echo "Clang-format found formatting problems in the following " \
+                  "files. See diff in the clang-format.patch artifact."
+            git diff --ignore-submodules --name-only
+            git checkout .
+            exit 1
+          fi
+          echo "Clang-format found no formatting problems"
+          exit 0
+
+      - name: Upload format patches
+        uses: actions/upload-artifact@v3
+        continue-on-error: true
+        if: ${{ failure() }}
+        with:
+          name: clang-format-patch
+          path: clang-*.patch
+
+  build-and-test:
+    name: Build and test
+    needs: sanity-check
+    runs-on: ubuntu-latest
+    container: ghcr.io/${{ github.repository }}-dev:${{ matrix.compiler.cc }}-latest
+    strategy:
+      matrix:
+        compiler:
+          - cc: clang-15
+            cxx: clang++-15
+            mode: Debug
+          - cc: gcc-11
+            cxx: g++-11
+            mode: Release
+          - cc: gcc-12
+            cxx: g++-12
+            mode: Release
+
+    steps:
+      - name: Decompress LLVM build
+        run: tar --posix --use-compress-program=unzstd -C /opt -xf /llvm.tar.tzst
+
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Set git safe
+        run: git config --global --add safe.directory $PWD
+
+      # We need this to install CCache successfuly
+      - name: Apt-get update
+        run: apt-get update
+
+      - name: Set up CCache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          append-timestamp: false
+          key: cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }}
+          save: ${{ github.ref_name == 'main' }}
+
+      - name: Build
+        run: .github/workflows/scripts/build_cudaq.sh ${{ matrix.compiler.mode }} ${{ matrix.compiler.cc }} ${{ matrix.compiler.cxx }} ccache
+
+      - name: Run tests
+        run: ctest --output-on-failure --test-dir build
+
+      - name: Cleanup CUDA Quantum build cache entry
+        if: ${{ github.ref_name == 'main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apt-get -y install gh
+          gh extension install actions/gh-actions-cache
+          gh actions-cache delete cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }} -R ${{ github.repository }} --confirm
+
