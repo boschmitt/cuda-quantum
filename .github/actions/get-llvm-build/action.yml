@@ -19,27 +19,11 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Get LLVM commit SHA
-      id: llvm-commit-sha
-      run: echo "sha=$(git rev-parse @:./tpls/llvm)" >> $GITHUB_OUTPUT
-      shell: bash
-
-    - name: Get LLVM configuration hash
-      id: llvm-config-hash
-      env:
-        llvm-build-script: .github/actions/get-llvm-build/build_llvm.sh
-      run: |
-        if [[ ${{ runner.os }} == 'Linux' ]]; then
-          echo "hash=$(md5sum ${{ env.llvm-build-script }} | awk '{print $1}')" >> $GITHUB_OUTPUT
-        elif [[ ${{ runner.os }} == 'macOS' ]]; then
-          echo "hash=$(md5 ${{ env.llvm-build-script }} | awk '{print $4}')" >> $GITHUB_OUTPUT
-        fi
-      shell: bash
-
-    - name: Create LLVM build cache key
-      id: llvm-build-cache-key
-      run: echo "key=llvm-${{ runner.os }}-${{ steps.llvm-commit-sha.outputs.sha }}-${{ steps.llvm-config-hash.outputs.hash }}-${{ inputs.toolchain }}" >> $GITHUB_OUTPUT
-      shell: bash
+    - name: Get LLVM build identifier
+      id: get-llvm-build-id
+      uses: ./.github/actions/get-llvm-build-id
+      with:
+        toolchain: ${{ inputs.toolchain }}
 
     - name: Try to restoring LLVM from cache
       id: restore-llvm-cache
@@ -47,7 +31,7 @@ runs:
       with:
         fail-on-cache-miss: ${{ inputs.only-restore == 'true' }}
         path: tpls/llvm/install/llvm/
-        key: ${{ steps.llvm-build-cache-key.outputs.key }}
+        key: ${{ steps.get-llvm-build-id.outputs.id }}
 
     - name: Set up CCache
       if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
@@ -57,7 +41,7 @@ runs:
         variant: sccache
         append-timestamp: false
         key: llvm-${{ runner.os }}-${{ inputs.toolchain }}
-        save: ${{ github.ref_name == 'main' }}
+        save: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
 
     - name: Build LLVM
       if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
@@ -78,11 +62,22 @@ runs:
         path: tpls/llvm/install/llvm/
         key: ${{ steps.restore-llvm-cache.outputs.cache-primary-key }}
 
-    - name: Cleanup CUDA Quantum build cache entry
-      if: ${{ github.ref_name == 'main' }}
+    - name: Cleanup cache
+      if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         gh extension install actions/gh-actions-cache
-        gh actions-cache delete sccache-llvm-${{ runner.os }}-${{ inputs.toolchain }} -R ${{ github.repository }} --confirm
+
+        REPO=${{ github.repository }}
+        BRANCH="refs/heads/main"
+        KEYS=$(gh actions-cache list --key llvm-${{ runner.os }}-${{ inputs.toolchain }} -R $REPO -B $BRANCH | cut -f 1 )
+
+        # Setting this to not fail the workflow while deleting cache keys.
+        set +e
+        for key in $KEYS
+        do
+          echo "Deleting cache $key"
+          gh actions-cache delete $key -R ${{ github.repository }} --confirm
+        done
       shell: bash

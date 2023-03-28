@@ -1,0 +1,36 @@
+name: 'Get LLVM build identifier'
+
+inputs:
+  toolchain:
+    description: 'Toolchain name and version (e.g., gcc-11 and clang-15)'
+    required: true
+
+outputs:
+  id:
+    description: 'LLVM build unique identifier'
+    value: ${{ steps.llvm-build-cache-key.outputs.key }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get LLVM commit SHA
+      id: llvm-commit-sha
+      run: echo "sha=$(git rev-parse @:./tpls/llvm)" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Get LLVM configuration hash
+      id: llvm-config-hash
+      env:
+        llvm-build-script: .github/actions/get-llvm-build/build_llvm.sh
+      run: |
+        if [[ ${{ runner.os }} == 'Linux' ]]; then
+          echo "hash=$(md5sum ${{ env.llvm-build-script }} | awk '{print $1}')" >> $GITHUB_OUTPUT
+        elif [[ ${{ runner.os }} == 'macOS' ]]; then
+          echo "hash=$(md5 ${{ env.llvm-build-script }} | awk '{print $4}')" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Create LLVM build cache key
+      id: llvm-build-cache-key
+      run: echo "key=llvm-${{ runner.os }}-${{ steps.llvm-commit-sha.outputs.sha }}-${{ steps.llvm-config-hash.outputs.hash }}-${{ inputs.toolchain }}" >> $GITHUB_OUTPUT
+      shell: bash

@@ -10,10 +10,11 @@
 
 # This script is intended to be called from the github workflows.
 
-BUILD_TYPE=${1:-"Release"}
-CC=${2:-"clang"}
-CXX=${3:-"clang++"}
-LAUNCHER=${4:-""}
+LLVM_INSTALL_PREFIX=${1}
+BUILD_TYPE=${2}
+CC=${3}
+CXX=${4}
+LAUNCHER=${5}
 
 mkdir build
 cd build
@@ -27,8 +28,8 @@ cmake .. \
   -DCMAKE_C_COMPILER_LAUNCHER=$LAUNCHER \
   -DCMAKE_CXX_COMPILER_LAUNCHER=$LAUNCHER \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DMLIR_DIR=/opt/llvm/lib/cmake/mlir \
-  -DLLVM_DIR=/opt/llvm/lib/cmake/llvm \
+  -DMLIR_DIR=$LLVM_INSTALL_PREFIX/lib/cmake/mlir \
+  -DLLVM_DIR=$LLVM_INSTALL_PREFIX/lib/cmake/llvm \
   -DLLVM_EXTERNAL_LIT=$(which lit) \
   -DLLVM_ENABLE_ASSERTIONS=ON \
   -DCUDAQ_ENABLE_PYTHON=ON

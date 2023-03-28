@@ -31,7 +31,6 @@ def QuakeDialect : Dialect {
     /// Register all Quake types.
     void registerTypes();
   }];
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 #endif // CUDAQ_OPTIMIZER_DIALECT_QUAKE_IR_QUAKE

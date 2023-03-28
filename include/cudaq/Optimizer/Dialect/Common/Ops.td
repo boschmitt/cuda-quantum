@@ -37,7 +37,7 @@ class GenOperator<string mnemonic, list<Trait> traits = []>
 
     /// If the parameter is known at compilation-time, return its value as a
     /// double.
-    llvm::Optional<double> getParameterAsDouble(unsigned i = 0u) {
+    std::optional<double> getParameterAsDouble(unsigned i = 0u) {
       auto param = getParameter();
       auto paramDefOp = param.getDefiningOp();
       if (!paramDefOp)

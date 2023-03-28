@@ -6,15 +6,15 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/llvm_bump.yml'
-      - '.github/actions/get-llvm-build/**'
-      - 'tpls/llvm/**'
+      - '.github/actions/get-llvm-build'
+      - 'tpls/llvm'
   pull_request:
     branches: [main]
     types: [assigned, opened, synchronize, reopened]
     paths:
       - '.github/workflows/llvm_bump.yml'
-      - '.github/actions/get-llvm-build/**'
-      - 'tpls/llvm/**'
+      - '.github/actions/get-llvm-build'
+      - 'tpls/llvm'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -67,66 +67,59 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           append-timestamp: false
-          key: cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }}
+          key: cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }}${{ github.event.pull_request.number }}
+          restore-keys: cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }}
+
+      - name: Install python requirements
+        run: pip install numpy pytest lit
+
+      - name: Build
+        run: .github/workflows/scripts/build_cudaq.sh tpls/llvm/install/llvm ${{ matrix.compiler.mode }} ${{ matrix.compiler.cc }} ${{ matrix.compiler.cxx }} ccache
+
+      - name: Run tests
+        run: ctest --output-on-failure --test-dir build
+
+  macos-build:
+    name: macOS build
+    # Not ready
+    if: false
+    runs-on: macos-latest
+    env:
+      toolchain: clang-15
+      cc: $(brew --prefix llvm@15)/bin/clang
+      cxx: $(brew --prefix llvm@15)/bin/clang++
+
+    steps:
+      - name: Install requirements
+        run: brew install ninja
+
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Set git safe
+        run: git config --global --add safe.directory $PWD
+
+      - name: Get LLVM build
+        uses: ./.github/actions/get-llvm-build
+        with:
+          toolchain: ${{ env.toolchain }}
+          cc: ${{ env.cc }}
+          cxx: ${{ env.cxx }}
+          only-restore: 'false'
+
+      - name: CCache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          append-timestamp: false
+          key: cudaq-${{ runner.os }}-${{ env.toolchain }}-Release
           save: ${{ github.ref_name == 'main' }}
 
       - name: Install python requirements
         run: pip install numpy pytest lit
 
       - name: Build
-        run: .github/workflows/scripts/build_cudaq.sh ${{ matrix.compiler.mode }} ${{ matrix.compiler.cc }} ${{ matrix.compiler.cxx }} ccache
+        run: .github/workflows/scripts/build_cudaq.sh tpls/llvm/install/llvm Debug ${{ env.cc }} ${{ env.cxx }} ccache
 
       - name: Run tests
-        run: ctest --output-on-failure --test-dir build
-
-      - name: Cleanup CUDA Quantum build cache entry
-        if: ${{ github.ref_name == 'main' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh extension install actions/gh-actions-cache
-          gh actions-cache delete cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.mode }} -R ${{ github.repository }} --confirm
-
-
-  # macos-build:
-  #   name: macOS build
-  #   runs-on: macos-latest
-  #   env:
-  #     toolchain: clang-15
-  #     cc: $(brew --prefix llvm@15)/bin/clang
-  #     cxx: $(brew --prefix llvm@15)/bin/clang++
-  #
-  #   steps:
-  #     - name: Install requirements
-  #       run: brew install ninja
-  #
-  #     - name: Get code
-  #       uses: actions/checkout@v3
-  #
-  #     - name: Set git safe
-  #       run: git config --global --add safe.directory $PWD
-  #
-  #     - name: Get LLVM build
-  #       uses: ./.github/actions/get-llvm-build
-  #       with:
-  #         toolchain: ${{ env.toolchain }}
-  #         cc: ${{ env.cc }}
-  #         cxx: ${{ env.cxx }}
-  #         only-restore: 'false'
-  #
-  #     - name: CCache
-  #       uses: hendrikmuhs/ccache-action@v1.2
-  #       with:
-  #         append-timestamp: false
-  #         key: cudaq-${{ runner.os }}-${{ env.toolchain }}-Release
-  #         save: ${{ github.ref_name == 'main' }}
-  #
-  #     - name: Install python requirements
-  #       run: pip install numpy pytest lit
-  #
-  #     - name: Build
-  #       run: .github/workflows/scripts/build_cudaq.sh Debug ${{ env.cc }} ${{ env.cxx }} ccache
-  #
-  #     - name: Run tests
-  #       run: |
-  #         ctest --output-on-failure --test-dir build
+          ctest --output-on-failure --test-dir build

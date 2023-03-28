@@ -26,6 +26,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllPasses.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include <charconv>
 #include <dlfcn.h>
@@ -378,6 +379,7 @@ int main(int argc, char **argv) {
   cudaq::mlirContext = std::make_unique<mlir::MLIRContext>(registry);
   cudaq::mlirContext->loadAllAvailableDialects();
   // Register the translation to LLVM IR with the MLIR context.
+  mlir::registerBuiltinDialectTranslation(*cudaq::mlirContext.get());
   mlir::registerLLVMDialectTranslation(*cudaq::mlirContext.get());
 
   // Create the Default Target Backend.

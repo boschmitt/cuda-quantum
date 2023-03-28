@@ -1,0 +1,80 @@
+name: Cleanup caches by a branch
+
+on:
+  #TODO: remove
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    paths:
+      - '.github/workflows/build_and_test.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/llvm_bump.yml'
+      - '.github/actions/get-llvm-build'
+      - 'tpls/llvm'
+
+jobs:
+  always:
+    runs-on: ubuntu-latest
+    name: Cleanup PR cache
+    steps:
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Cleanup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh extension install actions/gh-actions-cache
+
+          REPO=${{ github.repository }}
+          BRANCH="refs/pull/${{ github.event.pull_request.number }}/merge"
+          KEYS=$(gh actions-cache list -R $REPO -B $BRANCH | cut -f 1 )
+
+          # Setting this to not fail the workflow while deleting cache keys.
+          set +e
+          for key in $KEYS
+          do
+            echo "Deleting cache $key"
+            # gh actions-cache delete $key -R $REPO -B $BRANCH --confirm
+          done
+          echo "Done"
+
+  cleanup_main:
+    # TODO: enable
+    # if: ${{ github.event.pull_request.merged == true && github.base_ref == 'main' }}
+    name: Cleanup main cache
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Get LLVM build identifier
+        id: get-llvm-build-id
+        uses: ./.github/actions/get-llvm-build-id
+        with:
+          toolchain: ''
+
+      - name: Cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install actions/gh-actions-cache
+
+          REPO=${{ github.repository }}
+          BRANCH="refs/heads/main"
+          KEYS=$(gh actions-cache list --key cudaq-${{ runner.os }} -R $REPO -B $BRANCH | cut -f 1 )
+
+          # Setting this to not fail the workflow while deleting cache keys.
+          set +e
+          for key in $KEYS
+          do
+            echo "Deleting cache $key"
+            # gh actions-cache delete $key -R ${{ github.repository }} --confirm
+          done

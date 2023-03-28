@@ -245,7 +245,7 @@ public:
     // that capture these values and replace the old values inside the region.
     auto fixArgs = [&](Value value, Block *block) {
       auto arg = rewriter.addArgument(block, value.getType(), value.getLoc());
-      rewriter.replaceUseIf(value, arg, [&](auto &operand) {
+      rewriter.replaceUsesWithIf(value, arg, [&](auto &operand) {
         return operand.getOwner()->getParentRegion() == block->getParent();
       });
     };

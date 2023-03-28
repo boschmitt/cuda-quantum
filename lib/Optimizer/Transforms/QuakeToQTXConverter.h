@@ -92,10 +92,10 @@ public:
 
   /// Hook for inserting operations, and make sure that newly inserted ops are
   /// tracked.
-  void notifyOperationInserted(mlir::Operation *op) override;
+  void notifyOperationInserted(mlir::Operation *op) /*override*/;
 
   /// PatternRewriter hook creating a new block.
-  void notifyBlockCreated(mlir::Block *block) override;
+  void notifyBlockCreated(mlir::Block *block) /*override*/;
 
   /// PatternRewriter hook for moving blocks out of a region.  Moves the blocks
   /// belonging to "region" before the given position in another region.  The two

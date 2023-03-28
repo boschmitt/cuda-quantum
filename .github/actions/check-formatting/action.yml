@@ -1,0 +1,55 @@
+name: 'Check formatting'
+
+runs:
+  using: "composite"
+  steps:
+    # Choose the commit to diff against for linting. This workflow is
+    # triggered on both pushes and pull requests to main. Hence, we have to
+    # find out if the pull request target branch is set---it will only be on
+    # the PR triggered flow). If it's not, then compare against the last commit.
+    - name: Choose base commit
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        if [ -z "$BASE_REF" ]; then
+          DIFF_COMMIT_NAME="HEAD^"
+        else
+          DIFF_COMMIT_NAME="$BASE_REF"
+        fi
+        echo "DIFF_COMMIT_NAME=$DIFF_COMMIT_NAME" >> $GITHUB_ENV
+      shell: sh
+
+    # We did a shallow clone, and thus we need to make sure to fetch the base
+    # commit.
+    - name: Fetch base commit
+      run: |
+        if echo "$DIFF_COMMIT_NAME" | grep -q HEAD; then
+          DIFF_COMMIT_SHA=$(git rev-parse $DIFF_COMMIT_NAME)
+        else
+          git fetch --recurse-submodules=no origin $DIFF_COMMIT_NAME
+          DIFF_COMMIT_SHA=$(git rev-parse origin/$DIFF_COMMIT_NAME)
+        fi
+        echo "DIFF_COMMIT_SHA=$DIFF_COMMIT_SHA" >> $GITHUB_ENV
+      shell: sh
+
+    - name: clang-format
+      run: |
+        cp /opt/llvm/bin/git-clang-format /usr/bin/
+        git config clangFormat.binary /opt/llvm/bin/clang-format
+        if ! git clang-format $DIFF_COMMIT_SHA -- ':!:tpls/*' ':!:test'; then
+          git diff --ignore-submodules > clang-format.patch
+          echo "::error::Clang-format found formatting problems." \
+                "Check the uploaded artifact."
+          exit 1
+        fi
+        echo "Clang-format found no formatting problems"
+        exit 0
+      shell: sh
+
+    - name: Upload format patches
+      uses: actions/upload-artifact@v3
+      continue-on-error: true
+      if: ${{ failure() }}
+      with:
+        name: clang-format-patch
+        path: clang-*.patch

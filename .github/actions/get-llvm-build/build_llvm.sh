@@ -29,12 +29,19 @@ LLVM_COMPONENTS+=";mlir-cmake-exports;mlir-headers;mlir-libraries"
 # Tools / Utils
 LLVM_COMPONENTS+=";llvm-config;clang-format;llc;clang;mlir-tblgen;FileCheck;count;not"
 
-git submodule update --quiet --init --recommend-shallow tpls/llvm
+# Clone LLVM fast
+LLVM_SHA=$(git rev-parse @:./tpls/llvm)
+cd tpls/llvm
+git init
+git remote add origin https://github.com/llvm/llvm-project
+git fetch --depth=1 origin $LLVM_SHA
+git reset --hard FETCH_HEAD
 
-mkdir -p tpls/llvm/build
-mkdir -p tpls/llvm/install/llvm
+mkdir build
+mkdir -p install/llvm
 
-cd tpls/llvm/build
+# Configure and build
+cd build
 cmake ../llvm \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=$BUILD_TYPE \

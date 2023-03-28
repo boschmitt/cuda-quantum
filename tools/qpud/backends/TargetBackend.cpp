@@ -112,7 +112,7 @@ TargetBackend::compile(MLIRContext &context, const std::string_view quakeCode) {
   }
 
   // Convert the module to LLVM IR in a new LLVM IR context.
-  llvmContext.setOpaquePointers(false);
+  llvmContext.setOpaquePointers(true);
   auto llvmModule = translateModuleToLLVMIR(m_module.get(), llvmContext);
   if (!llvmModule) {
     llvm::errs() << "Failed to translate module to LLVM IR\n";
