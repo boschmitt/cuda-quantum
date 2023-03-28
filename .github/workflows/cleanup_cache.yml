@@ -1,0 +1,71 @@
+name: Cleanup PR caches
+
+on:
+  pull_request:
+    types: [closed]
+    paths:
+      - '.github/workflows/build_and_test.yml'
+      - '**.cpp'
+      - '**.h'
+      - '**.in'
+      - '**.py'
+      - '**.mlir'
+      - '**.qtx'
+      - '**.qke'
+      - '**/CMakeLists.txt'
+
+
+jobs:
+  always:
+    runs-on: ubuntu-latest
+    name: Cleanup PR cache
+    permissions:
+      actions: write
+    steps:
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Cleanup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh extension install actions/gh-actions-cache
+
+          REPO=${{ github.repository }}
+          BRANCH="refs/pull/${{ github.event.pull_request.number }}/merge"
+          KEYS=$(gh actions-cache list --key ccache-cudaq- -R $REPO -B $BRANCH | cut -f 1 )
+
+          # Setting this to not fail the workflow while deleting cache keys.
+          set +e
+          for key in $KEYS
+          do
+            gh actions-cache delete $key -R $REPO -B $BRANCH --confirm
+          done
+          echo "Done"
+
+  cleanup_main:
+    if: ${{ github.event.pull_request.merged == true && github.base_ref == 'main' }}
+    name: Cleanup main cache
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install actions/gh-actions-cache
+
+          REPO=${{ github.repository }}
+          BRANCH="refs/heads/main"
+          KEYS=$(gh actions-cache list --key ccache-cudaq- -R $REPO -B $BRANCH | cut -f 1 )
+
+          # Setting this to not fail the workflow while deleting cache keys.
+          set +e
+          for key in $KEYS
+          do
+            gh actions-cache delete $key -R ${{ github.repository }} --confirm
+          done
