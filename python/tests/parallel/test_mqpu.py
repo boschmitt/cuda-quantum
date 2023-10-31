@@ -12,8 +12,7 @@ import numpy as np
 
 skipIfNoMQPU = pytest.mark.skipif(
     not (cudaq.num_available_gpus() > 0 and cudaq.has_target('nvidia-mqpu')),
-    reason="nvidia-mqpu backend not available"
-)
+    reason="nvidia-mqpu backend not available")
 
 
 # Helper function for asserting two values are within a
@@ -78,7 +77,7 @@ def testLargeProblem():
     e = cudaq.observe(kernel, H, execParams, execution=cudaq.parallel.thread)
     stop = timeit.default_timer()
     print("mqpu time = ", (stop - start))
-    assert assert_close(e.expectation_z(), e.expectation_z())
+    assert assert_close(e.expectation(), e.expectation())
 
     # Reset for the next tests.
     cudaq.reset_target()
@@ -105,12 +104,48 @@ def testAccuracy():
 
     # Get the `cudaq.ObserveResult` back from `cudaq.observe()`.
     # No shots provided.
-    result_no_shots = cudaq.observe(kernel, hamiltonian, 0.59, execution=cudaq.parallel.thread)
-    expectation_value_no_shots = result_no_shots.expectation_z()
+    result_no_shots = cudaq.observe(kernel,
+                                    hamiltonian,
+                                    0.59,
+                                    execution=cudaq.parallel.thread)
+    expectation_value_no_shots = result_no_shots.expectation()
     assert assert_close(want_expectation_value, expectation_value_no_shots)
 
     cudaq.reset_target()
 
+@skipIfNoMQPU
+def testGetStateAsync():
+    cudaq.set_target("nvidia-mqpu")
+    target = cudaq.get_target()
+    num_qpus = target.num_qpus()
+    print("Number of QPUs:", num_qpus)
+
+    (kernel, iters) = cudaq.make_kernel(int)
+    num_qubits = 1
+    qubits = kernel.qalloc(num_qubits)
+    theta = 0.2
+
+    def trotter(index):
+        for i in range(num_qubits):
+            kernel.rx(theta, qubits[i])
+
+    kernel.for_loop(start=0, stop=iters, function=trotter)
+
+    asyns_handles = []
+    trotter_iters = 1
+    for qpu in range(num_qpus):
+        asyns_handles.append(cudaq.get_state_async(kernel, trotter_iters, qpu_id=qpu))
+        trotter_iters += 1
+
+    angle = 0.0
+    for handle in asyns_handles:
+        angle += 0.2
+        expected_state = [np.cos(angle/2), -1j*np.sin(angle/2)]
+        state = handle.get()
+        assert np.allclose(state, expected_state, atol=1e-3)
+
+        # Reset for the next tests.
+        cudaq.reset_target()
 
 # leave for gdb debugging
 if __name__ == "__main__":

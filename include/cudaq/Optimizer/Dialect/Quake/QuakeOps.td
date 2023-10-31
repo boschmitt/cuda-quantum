@@ -146,7 +146,7 @@ def quake_ComputeActionOp : QuakeOp<"compute_action"> {
   }];
 }
 
-def quake_ToControlOp : QuakeOp<"to_ctrl"> {
+def quake_ToControlOp : QuakeOp<"to_ctrl", [Pure]> {
   let summary = "Convert a wire value to a control value.";
   let description = [{
     This operation makes the conversion of a wire value to a control value
@@ -169,7 +169,7 @@ def quake_ToControlOp : QuakeOp<"to_ctrl"> {
   }];
 }
 
-def quake_FromControlOp : QuakeOp<"from_ctrl"> {
+def quake_FromControlOp : QuakeOp<"from_ctrl", [Pure]> {
   let summary = "Convert a control value to a wire value.";
   let description = [{
     This operation makes the conversion of a control value to a wire value
@@ -391,17 +391,49 @@ def quake_ApplyOp : QuakeOp<"apply",
   }];
 
   let arguments = (ins
-    SymbolRefAttr:$callee,
+    OptionalAttr<SymbolRefAttr>:$callee,
+    Variadic<cc_CallableType>:$indirect_callee, // must be 0 or 1 element
     UnitAttr:$is_adj,
     Variadic<AnyQType>:$controls,
     Variadic<AnyType>:$args
   );
   let results = (outs Variadic<AnyType>);
 
-  let assemblyFormat = [{
-    (`<` `adj` $is_adj^ `>`)? $callee (`[` $controls^ `]`)? $args `:`
-      functional-type(operands,results) attr-dict
-  }];
+  let hasCustomAssemblyFormat = 1;
+  let builders = [
+    OpBuilder<(ins "mlir::TypeRange":$retTy,
+                   "mlir::SymbolRefAttr":$callee,
+                   "mlir::UnitAttr":$is_adj,
+                   "mlir::ValueRange":$controls,
+                   "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, retTy, callee, mlir::ValueRange{},
+                   is_adj, controls, args);
+    }]>,
+    OpBuilder<(ins "mlir::TypeRange":$retTy,
+                   "mlir::SymbolRefAttr":$callee,
+                   "bool":$is_adj,
+                   "mlir::ValueRange":$controls,
+                   "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, retTy, callee, mlir::ValueRange{},
+                   is_adj, controls, args);
+    }]>,
+    OpBuilder<(ins "mlir::TypeRange":$retTy,
+                   "mlir::Value":$callable,
+                   "mlir::UnitAttr":$is_adj,
+                   "mlir::ValueRange":$controls,
+                   "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, retTy, mlir::SymbolRefAttr{},
+                   mlir::ValueRange{callable}, is_adj, controls, args);
+    }]>,
+    OpBuilder<(ins "mlir::TypeRange":$retTy,
+                   "mlir::Value":$callable,
+                   "bool":$is_adj,
+                   "mlir::ValueRange":$controls,
+                   "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, retTy, mlir::SymbolRefAttr{},
+                   mlir::ValueRange{callable}, is_adj, controls, args);
+    }]>
+  ];
 
   let extraClassDeclaration = [{
     static constexpr llvm::StringRef getCalleeAttrNameStr() { return "callee"; }
@@ -630,7 +662,7 @@ def MzOp : Measurement<"mz"> {
 }
 
 //===----------------------------------------------------------------------===//
-// Quantum operators (gates)
+// Quantum gates
 //===----------------------------------------------------------------------===//
 
 class QuakeOperator<string mnemonic, list<Trait> traits = []>
@@ -751,13 +783,30 @@ class TwoTargetOp<string mnemonic, list<Trait> traits = []> :
                 traits)>;
 
 //===----------------------------------------------------------------------===//
-// Quantum operators (gates)
+// Unitary quantum transformations
 //===----------------------------------------------------------------------===//
+
+def ExpPauliOp : QuakeOp<"exp_pauli"> {
+  let summary = "General Pauli tensor product rotation";
+  let description = [{
+    This operation affects a general Pauli tensor product rotation on 
+    the input qubits. The number of Pauli characters in the input Pauli word 
+    string must equal the number of qubits in the veq. Mathematically, this operation 
+    applies exp(i theta P) where P is a general Pauli tensor product. 
+  }];
+  
+  let arguments = (ins AnyFloat:$parameter, VeqType:$qubits, cc_PointerType:$pauli);
+  let results = (outs );
+
+  let assemblyFormat = [{
+    `(` $parameter `)` $qubits `,` $pauli `:` functional-type(operands, results) attr-dict
+  }];
+}
 
 def HOp : OneTargetOp<"h", [Hermitian]> {
   let summary = "Hadamard operation";
   let description = [{
-    This is a pi rotation about the X+Z axis, and has the effect of changing the
+    This is a π rotation about the X+Z axis, and has the effect of changing the
     computation basis from |0> (|1>) to |+> (|->) and vice-versa, meaning that
     it enables one to create a superposition of basis states.
 
@@ -783,7 +832,7 @@ def PhasedRxOp : QuakeOperator<"phased_rx",
     Matrix representation:
     ```
     PhasedRx(θ,φ) = |        cos(θ/2)        -iexp(-iφ) * sin(θ/2) |
-                    | -iexp(iφ)) * sin(θ/2)         cos(θ/2)       |
+                    |  -iexp(iφ) * sin(θ/2)         cos(θ/2)       |
     ```
 
     Circuit symbol:
@@ -829,6 +878,7 @@ def RxOp : OneTargetParamOp<"rx", [Rotation]> {
      └───────┘
     ```
   }];
+  let hasCanonicalizer = 1;
 }
 
 def RyOp : OneTargetParamOp<"ry", [Rotation]> {
@@ -847,6 +897,7 @@ def RyOp : OneTargetParamOp<"ry", [Rotation]> {
      └───────┘
     ```
   }];
+  let hasCanonicalizer = 1;
 }
 
 def RzOp : OneTargetParamOp<"rz", [Rotation]> {
@@ -865,12 +916,13 @@ def RzOp : OneTargetParamOp<"rz", [Rotation]> {
      └───────┘
     ```
   }];
+  let hasCanonicalizer = 1;
 }
 
 def SOp : OneTargetOp<"s"> {
   let summary = "S operation (aka, P or Sqrt(Z))";
   let description = [{
-    This operation applies to its target a pi/2 rotation about the Z axis.
+    This operation applies to its target a π/2 rotation about the Z axis.
 
     Matrix representation:
     ```
@@ -890,7 +942,7 @@ def SOp : OneTargetOp<"s"> {
 def SwapOp : TwoTargetOp<"swap", [Hermitian]> {
   let summary = "Swap operation";
   let description = [{
-    This operation swaps the states of two wires.
+    This operation swaps the states of two qubits.
 
     Matrix representation:
     ```

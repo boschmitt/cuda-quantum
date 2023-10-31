@@ -114,7 +114,7 @@ async def postJob(
         kernel = ctypes.CFUNCTYPE(None)(funcPtr)
 
         # Invoke the Kernel
-        cudaq.testing.toggleBaseProfile()
+        cudaq.testing.toggleDynamicQubitManagement()
         qubits, context = cudaq.testing.initialize(numQubitsRequired, 1000)
         kernel()
         results = cudaq.testing.finalize(qubits, context)
@@ -129,7 +129,7 @@ async def postJob(
 
 # Retrieve the job, simulate having to wait by counting to 3
 # until we return the job results
-@app.get("/tasks/{jobId}/results")
+@app.get("/tasks/{jobId}/all_info")
 async def getJob(jobId: str):
     global countJobGetRequests, createdJobs, shots
 

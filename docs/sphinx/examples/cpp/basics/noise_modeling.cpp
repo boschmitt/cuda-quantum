@@ -1,6 +1,6 @@
 // Compile and run with:
 // ```
-// nvq++ noise_modeling.cpp -o noise.x && ./noise.x
+// nvq++ noise_modeling.cpp --target density-matrix-cpu -o noise.x && ./noise.x
 // ```
 
 #include "cudaq.h"
@@ -49,4 +49,8 @@ int main() {
   // Run the noisy simulation
   counts = cudaq::sample(xgate);
   counts.dump();
+
+  // Unset the noise model when done. This is not necessary in this case but is
+  // good practice in order to not interfere with future simulations.
+  cudaq::unset_noise();
 }

@@ -11,17 +11,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 add_cudaq_library(OptCodeGen
-  LowerToBaseProfileQIR.cpp
+  LowerToQIRProfile.cpp
   LowerToQIR.cpp
   Passes.cpp
   RefToVeqAlloc.cpp
+  TranslateToIQMJson.cpp
+  TranslateToOpenQASM.cpp
 
   DEPENDS
     CCDialect
     OptCodeGenPassIncGen
     OptPeepholeIncGen
     OptTransformsPassIncGen
-    CUDAQTargetOpenQASM
     QuakeDialect
     
   LINK_LIBS PUBLIC

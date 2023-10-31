@@ -29,6 +29,9 @@ struct QuditInfo {
   std::size_t id = 0;
   QuditInfo(const std::size_t &_levels, const std::size_t &_id)
       : levels(_levels), id(_id) {}
+  bool operator==(const QuditInfo &other) {
+    return levels == other.levels && id == other.id;
+  }
 };
 
 bool __nvqpp__MeasureResultBoolConversion(int);
@@ -105,11 +108,13 @@ public:
 
   /// Apply the quantum instruction with the given name, on the provided
   /// target qudits. Supports input of control qudits and rotational parameters.
+  /// Can also optionally take a spin_op as input to affect a general
+  /// Pauli rotation.
   virtual void apply(const std::string_view gateName,
                      const std::vector<double> &params,
                      const std::vector<QuditInfo> &controls,
                      const std::vector<QuditInfo> &targets,
-                     bool isAdjoint = false) = 0;
+                     bool isAdjoint = false, const spin_op op = spin_op()) = 0;
 
   /// Reset the qubit to the |0> state
   virtual void reset(const QuditInfo &target) = 0;

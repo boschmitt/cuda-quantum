@@ -81,6 +81,10 @@ static cl::opt<bool> noSimplify(
 static cl::opt<bool> astDump("ast-dump", cl::desc("Dump the ast."),
                              cl::init(false));
 
+static cl::opt<bool> showVersion("nvqpp-version",
+                                 cl::desc("Print the version."),
+                                 cl::init(false));
+
 static cl::opt<bool> verboseClang("v",
                                   cl::desc("Add -v to clang tool arguments."),
                                   cl::init(false));
@@ -103,6 +107,9 @@ static cl::list<std::string> includePath("I", cl::desc("Include file path."));
 
 static cl::list<std::string>
     systemIncludePath("J", cl::desc("System include file path."));
+
+static cl::list<std::string>
+    extraClangArgs("Xcudaq", cl::desc("Extra options to pass to clang++"));
 
 inline bool isStdinInput(StringRef str) { return str == "-"; }
 
@@ -292,6 +299,8 @@ int main(int argc, char **argv) {
   // Process the command-line options, including reading in a file.
   [[maybe_unused]] llvm::InitLLVM unused(argc, argv);
   cl::ParseCommandLineOptions(argc, argv, toolName);
+  if (showVersion)
+    llvm::errs() << "nvq++ Version " << cudaq::getVersion() << '\n';
   ErrorOr<std::unique_ptr<MemoryBuffer>> fileOrError =
       MemoryBuffer::getFileOrSTDIN(inputFilename);
   if (auto ec = fileOrError.getError()) {
@@ -406,6 +415,9 @@ int main(int argc, char **argv) {
     clArgs.push_back("-Xclang");
     clArgs.push_back("-ast-dump");
   }
+
+  for (auto &xtra : extraClangArgs)
+    clArgs.push_back(xtra);
 
   // Allow a user to specify extra args for clang via
   // an environment variable.

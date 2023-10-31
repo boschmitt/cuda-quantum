@@ -180,26 +180,33 @@ bool kernelHasConditionalFeedback(const std::string &kernelName);
 void set_target_backend(const char *backend);
 
 /// @brief Utility function for setting the shots on the platform
-void set_shots(const std::size_t nShots);
+[[deprecated("Specify the number of shots in the using the overloaded sample() "
+             "and observe() functions")]] void
+set_shots(const std::size_t nShots);
 
-/// @brief Set a custom noise model for simulation
-void set_noise(cudaq::noise_model &model);
+/// @brief Set a custom noise model for simulation. The caller must also call
+/// `cudaq::unset_noise` before `model` gets deallocated or goes out of scope.
+void set_noise(const cudaq::noise_model &model);
 
 /// @brief Remove an existing noise model from simulation.
 void unset_noise();
 
 /// @brief Utility function for clearing the shots
-void clear_shots(const std::size_t nShots);
+[[deprecated("Specify the number of shots in the using the overloaded sample() "
+             "and observe() functions")]] void
+clear_shots(const std::size_t nShots);
 
 /// @brief Set a seed for any random number
 /// generators used in backend simulations.
 void set_random_seed(std::size_t seed);
 
+/// @brief Get a previously set random seed
+std::size_t get_random_seed();
+
 /// @brief The number of available GPUs.
 int num_available_gpus();
 
 namespace mpi {
-
 /// @brief Initialize MPI if available. This function
 /// is a no-op if there CUDA Quantum has not been built
 /// against MPI.

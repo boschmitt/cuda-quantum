@@ -3,21 +3,11 @@ CUDA Quantum Python API
 
 .. automodule:: cudaq
 
-    .. automethod:: cudaq::initialize_cudaq
-    .. automethod:: cudaq::num_available_gpus
-    .. automethod:: cudaq::set_random_seed
-    .. automethod:: cudaq.mpi::initialize
-    .. automethod:: cudaq.mpi::rank
-    .. automethod:: cudaq.mpi::num_ranks
-    .. automethod:: cudaq.mpi::all_gather
-    .. automethod:: cudaq.mpi::is_initialized
-    .. automethod:: cudaq.mpi::finalize
-
 Program Construction
 =============================
 
-.. autofunction:: cudaq::from_state
 .. autofunction:: cudaq::make_kernel
+.. autofunction:: cudaq::from_state
 .. autoclass:: cudaq::Kernel
 
     .. automethod:: qalloc
@@ -25,7 +15,7 @@ Program Construction
     .. automethod:: __call__
 
     .. automethod:: x
-    .. automethod:: cx 
+    .. automethod:: cx
     .. automethod:: y
     .. automethod:: cy
     .. automethod:: z
@@ -39,14 +29,20 @@ Program Construction
     .. automethod:: tdg
     .. automethod:: ct
     .. automethod:: rx
+    .. automethod:: crx
     .. automethod:: ry
+    .. automethod:: cry
     .. automethod:: rz
+    .. automethod:: crz
     .. automethod:: r1
+    .. automethod:: cr1
     .. automethod:: swap
+    .. automethod:: exp_pauli
     .. automethod:: mx
     .. automethod:: my
     .. automethod:: mz
     .. automethod:: c_if
+    .. automethod:: for_loop
     .. automethod:: adjoint
     .. automethod:: control
     .. automethod:: apply_call
@@ -58,6 +54,8 @@ Kernel Execution
 .. autofunction:: cudaq::sample_async
 .. autofunction:: cudaq::observe
 .. autofunction:: cudaq::observe_async
+.. autofunction:: cudaq::get_state
+.. autofunction:: cudaq::get_state_async
 .. autofunction:: cudaq::vqe
 
 Backend Configuration
@@ -71,8 +69,18 @@ Backend Configuration
 .. autofunction:: cudaq::set_noise
 .. autofunction:: cudaq::unset_noise
 
+.. automethod:: cudaq::initialize_cudaq
+.. automethod:: cudaq::num_available_gpus
+.. automethod:: cudaq::set_random_seed
+
 Data Types
 =============================
+
+.. autoclass:: cudaq::Target
+    :members:
+
+.. autoclass:: cudaq::State
+    :members:
 
 .. autoclass:: cudaq::QuakeValue
 
@@ -123,12 +131,17 @@ Data Types
 .. autoclass:: cudaq::AsyncObserveResult
     :members:
 
+.. autoclass:: cudaq::AsyncStateResult
+    :members:
+
 .. autoclass:: cudaq::OptimizationResult
     :members:
 
 
 Optimizers
 -----------------
+
+.. autoclass:: cudaq.optimizers::optimizer
 
 .. autoclass:: cudaq.optimizers::GradientDescent
     :members:
@@ -151,6 +164,9 @@ Gradients
 .. autoclass:: cudaq.gradients::CentralDifference
     :members:
 
+.. autoclass:: cudaq.gradients::ForwardDifference
+    :members:
+
 .. autoclass:: cudaq.gradients::ParameterShift
     :members:
 
@@ -162,9 +178,20 @@ Noisy Simulation
     :special-members: __init__
 
 .. autoclass:: cudaq::BitFlipChannel
+    :members:
+    :special-members: __init__
+
 .. autoclass:: cudaq::PhaseFlipChannel
+    :members:
+    :special-members: __init__
+
 .. autoclass:: cudaq::DepolarizationChannel
+    :members:
+    :special-members: __init__
+
 .. autoclass:: cudaq::AmplitudeDampingChannel
+    :members:
+    :special-members: __init__
 
 .. autoclass:: cudaq::KrausChannel
     :members:
@@ -172,3 +199,13 @@ Noisy Simulation
 
 .. autoclass:: cudaq::KrausOperator
     :members:
+
+MPI Submodule
+=============================
+
+.. automethod:: cudaq.mpi::initialize
+.. automethod:: cudaq.mpi::rank
+.. automethod:: cudaq.mpi::num_ranks
+.. automethod:: cudaq.mpi::all_gather
+.. automethod:: cudaq.mpi::is_initialized
+.. automethod:: cudaq.mpi::finalize

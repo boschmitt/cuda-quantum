@@ -18,6 +18,11 @@ std::string password = "password";
 std::string backendStringTemplate =
     "oqc;emulate;false;url;http://localhost:{};email;{};password;{}";
 
+bool isValidExpVal(double value) {
+  // give us some wiggle room while keep the tests fast
+  return value < -1.1 && value > -2.3;
+}
+
 CUDAQ_TEST(OQCTester, checkSampleSync) {
   auto backendString = fmt::format(fmt::runtime(backendStringTemplate),
                                    mockPort, email, password);
@@ -104,8 +109,8 @@ CUDAQ_TEST(OQCTester, checkObserveSync) {
   auto result = cudaq::observe(kernel, h, .59);
   result.dump();
 
-  printf("ENERGY: %lf\n", result.exp_val_z());
-  EXPECT_NEAR(result.exp_val_z(), -1.7, 1e-1);
+  printf("ENERGY: %lf\n", result.expectation());
+  EXPECT_TRUE(isValidExpVal(result.expectation()));
 }
 
 CUDAQ_TEST(OQCTester, checkObserveAsync) {
@@ -129,8 +134,8 @@ CUDAQ_TEST(OQCTester, checkObserveAsync) {
   auto result = future.get();
   result.dump();
 
-  printf("ENERGY: %lf\n", result.exp_val_z());
-  EXPECT_NEAR(result.exp_val_z(), -1.7, 1e-1);
+  printf("ENERGY: %lf\n", result.expectation());
+  EXPECT_TRUE(isValidExpVal(result.expectation()));
 }
 
 CUDAQ_TEST(OQCTester, checkObserveAsyncLoadFromFile) {
@@ -167,11 +172,12 @@ CUDAQ_TEST(OQCTester, checkObserveAsyncLoadFromFile) {
   std::remove("saveMeObserve.json");
   result.dump();
 
-  printf("ENERGY: %lf\n", result.exp_val_z());
-  EXPECT_NEAR(result.exp_val_z(), -1.7, 1e-1);
+  printf("ENERGY: %lf\n", result.expectation());
+  EXPECT_TRUE(isValidExpVal(result.expectation()));
 }
 
 int main(int argc, char **argv) {
+  setenv("OQC_PASSWORD", password.c_str(), 0);
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

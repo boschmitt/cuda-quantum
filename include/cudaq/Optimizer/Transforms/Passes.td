@@ -75,6 +75,17 @@ def ConvertToDirectCalls :
   }];
 }
 
+def DelayMeasurements : Pass<"delay-measurements", "mlir::func::FuncOp"> {
+  let summary =
+    "Move measurements as late as possible";
+
+  let description = [{
+    Move measurements as late as possible. This is useful for a Base Profile QIR program.
+  }];
+
+  let constructor = "cudaq::opt::createDelayMeasurementsPass()";
+}
+
 def ExpandMeasurements : Pass<"expand-measurements"> {
   let summary = "Expand multi-ref measurements to series on single refs.";
   let description = [{
@@ -132,7 +143,6 @@ def GenerateKernelExecution : Pass<"kernel-execution", "mlir::ModuleOp"> {
   }];
 
   let dependentDialects = ["cudaq::cc::CCDialect", "mlir::LLVM::LLVMDialect"];
-  let constructor = "cudaq::opt::createGenerateKernelExecution()";
 
   let options = [
     Option<"outputFilename", "output-filename", "std::string",
@@ -163,6 +173,38 @@ def LoopNormalize : Pass<"cc-loop-normalize"> {
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"allowClosedInterval", "allow-closed-iterval", "bool",
+      /*default=*/"true", "Allow loop iterations on a closed interval.">,
+    Option<"allowBreak", "allow-early-exit", "bool", /*default=*/"true",
+      "Allow unrolling of loop with early exit (i.e. break statement).">
+  ];
+}
+
+def LoopPeeling : Pass<"cc-loop-peeling"> {
+  let summary = "Peeling classical do-while loops.";
+  let description = [{
+    This loop peeling pass currently implements the transformation of a C++
+    do-while loop into a peeled body and while sequence.
+
+    ```c++
+    do {
+      body;
+    } while (condition);
+    ```
+    is transformed to
+    ```c++
+    body;
+    while (condition) {
+      body;
+    }
+    ```
+
+    Other cases of loop peeling may be implemented in the future.
+  }];
+
+  let dependentDialects = ["mlir::cf::ControlFlowDialect"];
 }
 
 def LoopUnroll : Pass<"cc-loop-unroll"> {
@@ -186,11 +228,13 @@ def LoopUnroll : Pass<"cc-loop-unroll"> {
       "Maximum iterations to unroll.">,
     Option<"signalFailure",
       "signal-failure-if-any-loop-cannot-be-completely-unrolled", "bool",
-      /*default=*/"false", "Signal failure if pass can't unroll all loops.">
+      /*default=*/"false", "Signal failure if pass can't unroll all loops.">,
+    Option<"allowBreak", "allow-early-exit", "bool", /*default=*/"false",
+      "Allow unrolling of loop with early exit (i.e. break statement).">
   ];
 }
 
-def UpdateRegisterNames : Pass<"update-register-names"> {
+def UpdateRegisterNames : Pass<"update-register-names", "mlir::ModuleOp"> {
   let summary = "Update classical register names";
   let description = [{
     After loop unrolling, there may be duplicate registerName attributes. Run
@@ -261,6 +305,38 @@ def MemToReg : Pass<"memtoreg", "mlir::func::FuncOp"> {
   ];
 }
 
+def PruneCtrlRelations : Pass<"pruned-ctrl-form", "mlir::func::FuncOp"> {
+  let summary = "Removes artifical control constraints between quantum ops.";
+  let description = [{
+    In the value semantics, quantum gates may be overly constrained in terms of
+    control qubits. These constraints can be removed within the IR to get a more
+    accurate representation of the dataflow of the *logical* qubits. This
+    alternative representation may be better suited to certain transformations.
+
+    The following example is overly constrained. The control wire, beginning
+    with `%0` is imposing what appears to be a strict ordering of
+    `[x -> h -> y]`.
+    ```mlir
+      %3:2 = x [%0] %1 : (!wire, !wire) -> (!wire, !wire)
+      %4:2 = h [%3#0] %2 : (!wire, !wire) -> (!wire, !wire)
+      %5:2 = y [%4#0] %3#1 : (!wire, !wire) -> (!wire, !wire)
+    ```
+
+    This snippet can be rewritten as the following IR to reflect that the
+    control wire has an identity applied so is unchanged. We observe less strict
+    ordering constraints of `[h | x -> y]`. This might allow a scheduling pass
+    to swap the order of the `h` and `x` gates, for instance.
+    ```mlir
+      %ctrl = to_ctrl %old.0 : (!wire) -> !control
+      %3 = x [%ctrl] %1 : (!control, !wire) -> !wire
+      %4 = h [%ctrl] %2 : (!control, !wire) -> !wire
+      %5 = y [%ctrl] %3 : (!control, !wire) -> !wire
+      %new.0 = from_ctrl %ctrl : (!control) -> !wire
+    ```
+  }];
+  let dependentDialects = ["quake::QuakeDialect"];
+}
+
 def QuakeSynthesize : Pass<"quake-synth", "mlir::ModuleOp"> {
   let summary =
     "Synthesize concrete quantum program from Quake code plus runtime values.";
@@ -273,11 +349,12 @@ def QuakeSynthesize : Pass<"quake-synth", "mlir::ModuleOp"> {
   let constructor = "cudaq::opt::createQuakeSynthesizer()";
 }
 
-def QuakeAddDeallocs : Pass<"quake-add-deallocs", "mlir::func::FuncOp"> {
+def QuakeAddDeallocs : Pass<"add-dealloc", "mlir::func::FuncOp"> {
  let summary = "Add quake deallocs to functions before they return.";
   let description = [{
     This pass ensures that a dealloc is inserted before functions return
-    if the function contains a AllocaOp. It should be run before quake-to-qir.
+    if the function contains a AllocaOp. It should be run before converting
+    to QIR, for example, in order to generate correct code.
   }];
 
   let constructor = "cudaq::opt::createQuakeAddDeallocs()";
@@ -295,14 +372,12 @@ def QuakeAddMetadata : Pass<"quake-add-metadata", "mlir::func::FuncOp"> {
   let constructor = "cudaq::opt::createQuakeAddMetadata()";
 }
 
-def QuakeObserveAnsatz : Pass<"quake-observe-ansatz", "mlir::func::FuncOp"> {
- let summary = "Given spin_op input, append measures to the Quake FuncOp";
+def ObserveAnsatz : Pass<"observe-ansatz", "mlir::func::FuncOp"> {
+ let summary = "Given spin_op input, append measures to the FuncOp";
   let description = [{
-    Given an unmeasured Quake representation (i.e. a state prep
-    ansatz), append measures based on the given spin_op specified in
-    binary symplectic form.
+    Given an unmeasured Quake representation (i.e. a state prep ansatz), append
+    measures based on the given spin_op specified in binary symplectic form.
   }];
-  let constructor = "cudaq::opt::createQuakeObserveAnsatzPass()";
   let options = [
     ListOption<"termBSF", "term-bsf", "unsigned",
       "The measurement bases as a Pauli tensor product represented in binary symplectic form.">
@@ -350,7 +425,7 @@ def UnwindLowering : Pass<"unwind-lowering", "mlir::func::FuncOp"> {
   let constructor = "cudaq::opt::createUnwindLoweringPass()";
 }
 
-def BasisConversionPass: Pass<"quake-basis-conversion", "mlir::ModuleOp"> {
+def BasisConversionPass: Pass<"basis-conversion", "mlir::ModuleOp"> {
   let summary = "Converts kernels to a set of basis operations.";
   let description = [{
     This pass takes as input a list of target (allowed) quantum operations.
@@ -381,7 +456,7 @@ def BasisConversionPass: Pass<"quake-basis-conversion", "mlir::ModuleOp"> {
   ];
 }
 
-def DecompositionPass: Pass<"quake-decomposition", "mlir::ModuleOp"> {
+def DecompositionPass: Pass<"decomposition", "mlir::ModuleOp"> {
   let summary = "Break down quantum operations.";
   let description = [{
     This pass performs decomposition over a set of operations by iteratively
@@ -405,7 +480,7 @@ def DecompositionPass: Pass<"quake-decomposition", "mlir::ModuleOp"> {
   ];
 }
 
-def MultiControlDecompositionPass: Pass<"quake-multicontrol-decomposition",
+def MultiControlDecompositionPass: Pass<"multicontrol-decomposition",
                                         "mlir::func::FuncOp"> {
   let summary = "Break down multi-control quantum operations.";
   let description = [{
@@ -419,6 +494,28 @@ def MultiControlDecompositionPass: Pass<"quake-multicontrol-decomposition",
     to decompose. In such cases, all qubits will be extracted. If the size is
     unknown at compilation-time, the pass leaves the operation as-is.
   }];
+}
+
+def MappingPass: Pass<"qubit-mapping", "mlir::func::FuncOp"> {
+  let summary = "Perform qubit mapping to account for connectivity constraints";
+  let description = [{
+    Some backends cannot support any-to-any multi-qubit operations, so this pass
+    performs mapping of the qubits by inserting the necessary swap operations
+    into the Quake IR.
+
+    Note: this pass requires strictly value semantics for any quantum
+    operations. It will throw an error if any memory reference semantics are
+    present on quantum operations.
+  }];
+  let options = [
+    Option<"device", "device", "std::string", /*default=*/"\"-\"",
+      "Device topology: path(N), ring(N), star(N), star(N,c), grid(w,h), file(/path/to/file)">,
+    Option<"debug", "debug", "bool", /*default=*/"false", "Enable debug for qubit-mapping pass algorithm">,
+    Option<"extendedLayerSize", "extendedLayerSize", "unsigned", /*default=*/"20", "Extended layer size">,
+    Option<"extendedLayerWeight", "extendedLayerWeight", "float", /*default=*/"0.5", "Extended layer weight">,
+    Option<"decayDelta", "decayDelta", "float", /*default=*/"0.5", "Decay delta">,
+    Option<"roundsDecayReset", "roundsDecayReset", "unsigned", /*default=*/"5", "Number of rounds before decay is reset">
+  ];
 }
 
 #endif // CUDAQ_OPT_OPTIMIZER_TRANSFORMS_PASSES

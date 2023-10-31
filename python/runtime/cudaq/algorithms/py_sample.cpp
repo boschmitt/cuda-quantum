@@ -23,6 +23,11 @@
 
 namespace cudaq {
 
+/// @brief Global cache map of OpaqueArguments
+// Using the same cache map provided by py_observe (hence extern).
+extern std::unordered_map<std::size_t, std::unique_ptr<OpaqueArguments>>
+    asyncArgsHolder;
+
 /// @brief Sample the state produced by the provided builder.
 sample_result pySample(kernel_builder<> &builder, py::args args = {},
                        std::size_t shots = 1000,
@@ -91,12 +96,17 @@ async_sample_result pySampleAsync(kernel_builder<> &builder,
   cudaq::info("Asynchronously sampling the provided pythonic kernel.");
   builder.jitCode();
   auto kernelName = builder.name();
-
+  std::hash<std::string> hasher;
+  // Create a unique integer key that combines the kernel name
+  // and the validated args.
+  std::size_t uniqueHash = hasher(kernelName) + hasher(py::str(args));
+  // Add the opaque args to the holder and pack the args into it
+  asyncArgsHolder.emplace(uniqueHash, std::make_unique<OpaqueArguments>());
+  packArgs(*asyncArgsHolder.at(uniqueHash).get(), validatedArgs);
   return details::runSamplingAsync(
-      [&, a = std::move(validatedArgs)]() mutable {
-        OpaqueArguments argData;
-        packArgs(argData, a);
-        builder.jitAndInvoke(argData.data());
+      [&builder, uniqueHash]() mutable {
+        auto &argData = asyncArgsHolder.at(uniqueHash);
+        builder.jitAndInvoke(argData->data());
       },
       platform, kernelName, shots, qpu_id);
 }
@@ -186,10 +196,9 @@ Args:
     an empty noise model.
 
 Returns:
-  :class:`SampleResult` or `list[SampleResult]`: A dictionary containing the measurement count
-      results for the :class:`Kernel`, or a list of such results in the 
-      case of `sample` function broadcasting. 
-      )#");
+  :class:`SampleResult` or `list[SampleResult]`: 
+  A dictionary containing the measurement count results for the :class:`Kernel`, 
+  or a list of such results in the case of `sample` function broadcasting.)#");
 
   mod.def(
       "sample_async",
@@ -216,8 +225,8 @@ Args:
     on the platform to target. Defaults to zero. Key-word only.
 
 Returns:
-  :class:`AsyncSampleResult` : A dictionary containing the measurement 
-    count results for the :class:`Kernel`.)#");
+  :class:`AsyncSampleResult`: 
+  A dictionary containing the measurement count results for the :class:`Kernel`.)#");
 
   mod.def(
       "sample_n",
@@ -241,6 +250,7 @@ For each argument type in the kernel signature, you must provide a
 list of arguments of that type. This function samples the state of
 the provided `kernel` at each set of arguments provided for the
 specified number of circuit executions (`shots_count`).
+
 Args:
   kernel (:class:`Kernel`): The :class:`Kernel` to execute `shots_count` 
       times on the QPU.
@@ -253,9 +263,11 @@ Args:
   noise_model (Optional[`NoiseModel`]): The optional :class:`NoiseModel`
       to add noise to the kernel execution on the simulator. Defaults to an empty 
       noise model.
+      
 Returns:
-  `list[SampleResult]` : A list of dictionary containing the measurement count
-      for each invocation of sample for the :class:`Kernel`.)#");
+  `list[SampleResult]`: 
+  A list of dictionary containing the measurement count for each invocation
+  of sample for the :class:`Kernel`.)#");
 }
 
 } // namespace cudaq
