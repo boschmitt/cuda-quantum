@@ -67,25 +67,26 @@ generateFullGateTensor(std::size_t num_control_qubits,
   return gate_tensor;
 }
 
-void SimulatorTensorNetBase::applyGate(const GateApplicationTask &task) {
-  const auto &controls = task.controls;
-  const auto &targets = task.targets;
+void SimulatorTensorNetBase::applyGate(
+    const std::string name, const std::vector<std::complex<double>> &matrix,
+    const std::vector<std::size_t> &controls,
+    const std::vector<std::size_t> &targets,
+    const std::vector<double> &params) {
   // Cache name lookup key:
   // <GateName>_<num control>_<Param>
   const std::string gateKey =
-      task.operationName + "_" + std::to_string(controls.size()) + "_" + [&]() {
+      name + "_" + std::to_string(controls.size()) + "_" + [&]() {
         std::stringstream paramsSs;
-        for (const auto &param : task.parameters) {
+        for (const auto &param : params)
           paramsSs << param << "_";
-        }
         return paramsSs.str();
       }();
   const auto iter = m_gateDeviceMemCache.find(gateKey);
 
   // This is the first time we see this gate, allocate device mem and cache it.
   if (iter == m_gateDeviceMemCache.end()) {
-    void *dMem = allocateGateMatrix(
-        generateFullGateTensor(controls.size(), task.matrix));
+    void *dMem =
+        allocateGateMatrix(generateFullGateTensor(controls.size(), matrix));
     m_gateDeviceMemCache[gateKey] = dMem;
   }
   std::vector<int32_t> qubits;

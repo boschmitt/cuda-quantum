@@ -563,10 +563,8 @@ protected:
     registerNameToMeasuredQubit.clear();
   }
 
-  /// @brief This pure virtual method is meant for subtypes
-  /// to implement, and its goal is to apply the gate described
-  /// by the GateApplicationTask to the subtype-specific state
-  /// data representation.
+  /// @brief This pure virtual method is meant for subtypes to implement, and
+  /// its goal is to apply the gate.
   virtual void applyGate(const std::string name,
                          const std::vector<std::complex<ScalarType>> &matrix,
                          const std::vector<std::size_t> &controls,

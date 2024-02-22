@@ -260,19 +260,23 @@ protected:
     extraWorkspaceSizeInBytes = 0;
   }
 
-  /// @brief Apply the given GateApplicationTask
-  void applyGate(const typename nvqir::CircuitSimulatorBase<
-                 ScalarType>::GateApplicationTask &task) override {
-    std::vector<int> controls, targets;
-    std::transform(task.controls.begin(), task.controls.end(),
-                   std::back_inserter(controls),
+  /// @brief Apply a gate.
+  void applyGate(const std::string name,
+                         const std::vector<std::complex<ScalarType>> &matrix,
+                         const std::vector<std::size_t> &controls,
+                         const std::vector<std::size_t> &targets,
+                         const std::vector<ScalarType> &params) override {
+    std::vector<int> cu_controls, cu_targets;
+    cu_controls.reserve(controls.size()), cu_targets.reserve(targets.size());
+    std::transform(controls.begin(), controls.end(),
+                   std::back_inserter(cu_controls),
                    [](std::size_t idx) { return static_cast<int>(idx); });
-    std::transform(task.targets.begin(), task.targets.end(),
-                   std::back_inserter(targets),
+    std::transform(targets.begin(), targets.end(),
+                   std::back_inserter(cu_targets),
                    [](std::size_t idx) { return static_cast<int>(idx); });
     // If we have no parameters, just apply the matrix.
     if (task.parameters.empty()) {
-      applyGateMatrix(task.matrix, controls, targets);
+      applyGateMatrix(matrix, cu_controls, cu_targets);
       return;
     }
 
@@ -280,16 +284,16 @@ protected:
     // compute with custatevecApplyPauliRotation
     if (task.operationName == "rx") {
       oneQubitOneParamApply<nvqir::rx<ScalarType>>(
-          task.parameters[0], controls, targets);
+          parameters[0], cu_controls, cu_targets);
     } else if (task.operationName == "ry") {
       oneQubitOneParamApply<nvqir::ry<ScalarType>>(
-          task.parameters[0], controls, targets);
+          parameters[0], cu_controls, cu_targets);
     } else if (task.operationName == "rz") {
       oneQubitOneParamApply<nvqir::rz<ScalarType>>(
-          task.parameters[0], controls, targets);
+          parameters[0], cu_controls, cu_targets);
     } else {
       // Fallback to just applying the gate.
-      applyGateMatrix(task.matrix, controls, targets);
+      applyGateMatrix(matrix, cu_controls, cu_targets);
     }
   }
 

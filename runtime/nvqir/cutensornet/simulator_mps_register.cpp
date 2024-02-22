@@ -80,17 +80,20 @@ public:
           m_state->factorizeMPS(m_maxBond, m_absCutoff, m_relCutoff);
   }
 
-  virtual void applyGate(const GateApplicationTask &task) override {
+  virtual void applyGate(const std::string name,
+                         const std::vector<std::complex<double>> &matrix,
+                         const std::vector<std::size_t> &controls,
+                         const std::vector<std::size_t> &targets,
+                         const std::vector<double> &params) override {
     // Check that we don't apply gates on 3+ qubits (not supported in MPS)
-    if (task.controls.size() + task.targets.size() > 2) {
-      const std::string gateDesc = task.operationName +
-                                   containerToString(task.controls) +
-                                   containerToString(task.targets);
+    if (controls.size() + targets.size() > 2) {
+      const std::string gateDesc =
+          name + containerToString(controls) + containerToString(targets);
       throw std::runtime_error("MPS simulator: Gates on 3 or more qubits are "
                                "unsupported. Encountered: " +
                                gateDesc);
     }
-    SimulatorTensorNetBase::applyGate(task);
+    SimulatorTensorNetBase::applyGate(name, matrix, controls, targets, params);
   }
 
   virtual std::size_t calculateStateDim(const std::size_t numQubits) override {
