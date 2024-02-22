@@ -174,18 +174,14 @@ protected:
   /// @brief Utility function for applying one-target-qubit rotation operations
   template <typename RotationGateT>
   void oneQubitOneParamApply(const double angle,
-                             const std::vector<std::size_t> &controls,
-                             const std::size_t qubitIdx) {
+                             const std::vector<int> &controls,
+                             const std::vector<int> &targets) {
     RotationGateT gate;
-    std::vector<int> controls32;
-    for (auto c : controls)
-      controls32.push_back((int)c);
     custatevecPauli_t pauli[] = {pauliStringToEnum(gate.name())};
-    int targets[] = {(int)qubitIdx};
-    custatevecApplyPauliRotation(handle, deviceStateVector,
+    HANDLE_ERROR(custatevecApplyPauliRotation(handle, deviceStateVector,
                                  cuStateVecCudaDataType, nQubitsAllocated,
-                                 -0.5 * angle, pauli, targets, 1,
-                                 controls32.data(), nullptr, controls32.size());
+                                 -0.5 * angle, pauli, targets.data(), 1,
+                                 controls.data(), nullptr, controls.size()));
   }
 
   /// @brief Increase the state size by the given number of qubits.
@@ -284,13 +280,13 @@ protected:
     // compute with custatevecApplyPauliRotation
     if (task.operationName == "rx") {
       oneQubitOneParamApply<nvqir::rx<ScalarType>>(
-          task.parameters[0], task.controls, task.targets[0]);
+          task.parameters[0], controls, targets);
     } else if (task.operationName == "ry") {
       oneQubitOneParamApply<nvqir::ry<ScalarType>>(
-          task.parameters[0], task.controls, task.targets[0]);
+          task.parameters[0], controls, targets);
     } else if (task.operationName == "rz") {
       oneQubitOneParamApply<nvqir::rz<ScalarType>>(
-          task.parameters[0], task.controls, task.targets[0]);
+          task.parameters[0], controls, targets);
     } else {
       // Fallback to just applying the gate.
       applyGateMatrix(task.matrix, controls, targets);
