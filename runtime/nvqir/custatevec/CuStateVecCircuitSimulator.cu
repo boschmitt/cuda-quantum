@@ -275,22 +275,22 @@ protected:
                    std::back_inserter(cu_targets),
                    [](std::size_t idx) { return static_cast<int>(idx); });
     // If we have no parameters, just apply the matrix.
-    if (task.parameters.empty()) {
+    if (params.empty()) {
       applyGateMatrix(matrix, cu_controls, cu_targets);
       return;
     }
 
     // If we have parameters, it may be more efficient to
     // compute with custatevecApplyPauliRotation
-    if (task.operationName == "rx") {
+    if (name == "rx") {
       oneQubitOneParamApply<nvqir::rx<ScalarType>>(
-          parameters[0], cu_controls, cu_targets);
-    } else if (task.operationName == "ry") {
+          params[0], cu_controls, cu_targets);
+    } else if (name == "ry") {
       oneQubitOneParamApply<nvqir::ry<ScalarType>>(
-          parameters[0], cu_controls, cu_targets);
-    } else if (task.operationName == "rz") {
+          params[0], cu_controls, cu_targets);
+    } else if (name == "rz") {
       oneQubitOneParamApply<nvqir::rz<ScalarType>>(
-          parameters[0], cu_controls, cu_targets);
+          params[0], cu_controls, cu_targets);
     } else {
       // Fallback to just applying the gate.
       applyGateMatrix(matrix, cu_controls, cu_targets);
