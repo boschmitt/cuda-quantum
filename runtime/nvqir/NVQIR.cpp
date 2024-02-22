@@ -415,7 +415,6 @@ Result *__quantum__qis__measure__body(Array *pauli_arr, Array *qubits) {
   // Some backends may better handle the observe task.
   // Let's give them that opportunity.
   if (currentContext->canHandleObserve) {
-    circuitSimulator->flushGateQueue();
     auto result = circuitSimulator->observe(*currentContext->spin.value());
     currentContext->expectationValue = result.expectationValue;
     currentContext->result = cudaq::sample_result(result);
@@ -452,7 +451,6 @@ Result *__quantum__qis__measure__body(Array *pauli_arr, Array *qubits) {
     }
   }
 
-  circuitSimulator->flushGateQueue();
   int shots = 0;
   if (currentContext->shots > 0) {
     shots = currentContext->shots;
@@ -475,7 +473,6 @@ Result *__quantum__qis__measure__body(Array *pauli_arr, Array *qubits) {
         circuitSimulator->rx(angle, it->second);
       }
     }
-    circuitSimulator->flushGateQueue();
   }
 
   return ResultZero;

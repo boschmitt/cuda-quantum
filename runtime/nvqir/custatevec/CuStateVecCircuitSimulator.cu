@@ -97,7 +97,6 @@ protected:
   using nvqir::CircuitSimulatorBase<ScalarType>::executionContext;
   using nvqir::CircuitSimulatorBase<ScalarType>::gateToString;
   using nvqir::CircuitSimulatorBase<ScalarType>::x;
-  using nvqir::CircuitSimulatorBase<ScalarType>::flushGateQueue;
   using nvqir::CircuitSimulatorBase<ScalarType>::previousStateDimension;
   using nvqir::CircuitSimulatorBase<ScalarType>::shouldObserveFromSampling;
 
@@ -345,7 +344,6 @@ public:
   /// @brief Reset the qubit
   /// @param qubitIdx
   void resetQubit(const std::size_t qubitIdx) override {
-    flushGateQueue();
     const int basisBits[] = {(int)qubitIdx};
     int parity;
     double rand = randomValues(1, 1.0)[0];
@@ -363,7 +361,6 @@ public:
   void applyExpPauli(double theta, const std::vector<std::size_t> &controlIds,
                      const std::vector<std::size_t> &qubits,
                      const cudaq::spin_op &op) override {
-    flushGateQueue();
     cudaq::info(" [cusv decomposing] exp_pauli({}, {})", theta,
                 op.to_string(false));
     std::vector<int> controls, targets;
@@ -449,9 +446,6 @@ public:
 
   /// @brief Compute the expected value from the observable matrix.
   cudaq::ExecutionResult observe(const cudaq::spin_op &op) override {
-
-    flushGateQueue();
-
     // The op is on the following target bits.
     std::set<std::size_t> targets;
     op.for_each_term([&](cudaq::spin_op &term) {

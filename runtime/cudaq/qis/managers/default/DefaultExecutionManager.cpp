@@ -157,8 +157,6 @@ protected:
 
   void measureSpinOp(const cudaq::spin_op &op) override {
     flushRequestedAllocations();
-    simulator()->flushGateQueue();
-
     if (executionContext->canHandleObserve) {
       auto result = simulator()->observe(*executionContext->spin.value());
       executionContext->expectationValue = result.expectationValue;
@@ -188,8 +186,6 @@ protected:
     if (!basisChange.empty()) {
       for (auto &basis : basisChange)
         basis(false);
-
-      simulator()->flushGateQueue();
     }
 
     // Get whether this is shots-based
@@ -207,8 +203,6 @@ protected:
       std::reverse(basisChange.begin(), basisChange.end());
       for (auto &basis : basisChange)
         basis(true);
-
-      simulator()->flushGateQueue();
     }
   }
 

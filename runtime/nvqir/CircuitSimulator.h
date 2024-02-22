@@ -31,20 +31,11 @@ namespace nvqir {
 /// state vector), sampling, and measurements.
 class CircuitSimulator {
 protected:
-  /// @brief Flush the current queue of gates, i.e.
-  /// apply them to the state. Internal and meant for
-  /// subclasses to implement
-  virtual void flushGateQueueImpl() = 0;
-
 public:
   /// @brief The constructor
   CircuitSimulator() = default;
   /// @brief The destructor
   virtual ~CircuitSimulator() = default;
-
-  /// @brief Flush the current queue of gates, i.e.
-  /// apply them to the state.
-  void flushGateQueue() { flushGateQueueImpl(); }
 
   /// @brief Provide an opportunity for any tear-down
   /// tasks before MPI Finalize is invoked. Here we leave
@@ -81,7 +72,6 @@ public:
                                "of identity operator is not supported");
       }
     }
-    flushGateQueue();
     cudaq::info(" [CircuitSimulator decomposing] exp_pauli({}, {})", theta,
                 op.to_string(false));
     std::vector<std::size_t> qubitSupport;
@@ -618,23 +608,6 @@ protected:
   virtual void applyNoiseChannel(const std::string_view gateName,
                                  const std::vector<std::size_t> &qubits) {}
 
-  /// @brief Flush the gate queue, run all queued gate
-  /// application tasks.
-  void flushGateQueueImpl() override {
-    while (!gateQueue.empty()) {
-      auto &next = gateQueue.front();
-      applyGate(next);
-      if (executionContext && executionContext->noiseModel) {
-        std::vector<std::size_t> noiseQubits{next.controls.begin(),
-                                             next.controls.end()};
-        noiseQubits.insert(noiseQubits.end(), next.targets.begin(),
-                           next.targets.end());
-        applyNoiseChannel(next.operationName, noiseQubits);
-      }
-      gateQueue.pop();
-    }
-  }
-
   /// @brief Set the current state to the |0> state,
   /// retaining the current number of qubits.
   virtual void setToZeroState() = 0;
@@ -821,9 +794,6 @@ public:
         std::iota(sampleQubits.begin(), sampleQubits.end(), 0);
       }
 
-      // Flush the queue if there are any gates to apply
-      flushGateQueue();
-
       // Flush any queued up sampling tasks
       flushAnySamplingTasks(/*force this*/ true);
 
@@ -868,10 +838,8 @@ public:
     }
 
     // Set the state data if requested.
-    if (executionContext->name == "extract-state") {
-      flushGateQueue();
+    if (executionContext->name == "extract-state")
       executionContext->simulationData = getStateData();
-    }
 
     // Deallocate the deferred qubits, but do so
     // without explicit qubit reset.
@@ -1048,9 +1016,6 @@ public:
   /// context, just measure, collapse, and return the bit.
   bool mz(const std::size_t qubitIdx,
           const std::string &registerName) override {
-    // Flush the Gate Queue
-    flushGateQueue();
-
     // If sampling, just store the bit, do nothing else.
     if (handleBasicSampling(qubitIdx, registerName))
       return true;

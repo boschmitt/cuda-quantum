@@ -182,9 +182,6 @@ public:
   }
 
   cudaq::ExecutionResult observe(const cudaq::spin_op &op) override {
-
-    flushGateQueue();
-
     // The op is on the following target bits.
     std::vector<std::size_t> targets;
     op.for_each_term([&](cudaq::spin_op &term) {
@@ -218,7 +215,6 @@ public:
   /// @brief Reset the qubit
   /// @param index 0-based index of qubit to reset
   void resetQubit(const std::size_t index) override {
-    flushGateQueue();
     const auto qubitIdx = convertQubitIndex(index);
     state = qpp::reset(state, {qubitIdx});
   }
@@ -270,18 +266,16 @@ public:
   }
 
   cudaq::State getStateData() override {
-    flushGateQueue();
     // There has to be at least one copy
     return cudaq::State{{stateDimension},
                         {state.data(), state.data() + state.size()}};
   }
 
   /// @brief Primarily used for testing.
-  auto getStateVector() {
-    flushGateQueue();
-    return state;
-  }
+  auto getStateVector() { return state; }
+
   std::string name() const override { return "qpp"; }
+
   NVQIR_SIMULATOR_CLONE_IMPL(QppCircuitSimulator<StateType>)
 };
 
