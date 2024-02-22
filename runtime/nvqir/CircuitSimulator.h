@@ -16,7 +16,6 @@
 
 #include <cstdarg>
 #include <cstddef>
-#include <queue>
 #include <sstream>
 #include <string>
 
@@ -343,9 +342,6 @@ protected:
           parameters(params) {}
   };
 
-  /// @brief The current queue of operations to execute
-  std::queue<GateApplicationTask> gateQueue;
-
   /// @brief Get the name of the current circuit being executed.
   std::string getCircuitName() const { return currentCircuitName; }
 
@@ -591,7 +587,7 @@ protected:
                    const std::vector<std::size_t> &controls,
                    const std::vector<std::size_t> &targets,
                    const std::vector<ScalarType> &params) {
-    gateQueue.emplace(name, matrix, controls, targets, params);
+    applyGate({name, matrix, controls, targets, params});
   }
 
   /// @brief This pure virtual method is meant for subtypes
@@ -741,8 +737,6 @@ public:
       cudaq::info("Deallocated all qubits, reseting state vector.");
       // all qubits deallocated,
       deallocateState();
-      while (!gateQueue.empty())
-        gateQueue.pop();
     }
   }
 
