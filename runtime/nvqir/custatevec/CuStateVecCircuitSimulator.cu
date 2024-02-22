@@ -390,15 +390,9 @@ public:
   /// the current state vector, directly on GPU with the
   /// given the operator matrix and target qubit indices.
   auto getExpectationFromOperatorMatrix(const std::complex<double> *matrix,
-                                        const std::vector<std::size_t> &tgts) {
+                                        const std::vector<int> &tgts) {
     void *extraWorkspace = nullptr;
     size_t extraWorkspaceSizeInBytes = 0;
-
-    // Convert the size_t tgts into ints
-    std::vector<int> tgtsInt(tgts.size());
-    std::transform(tgts.begin(), tgts.end(), tgtsInt.begin(),
-                   [&](std::size_t x) { return static_cast<int>(x); });
-    // our bit ordering is reversed.
     size_t nIndexBits = nQubitsAllocated;
 
     // check the size of external workspace
@@ -417,7 +411,7 @@ public:
     HANDLE_ERROR(custatevecComputeExpectation(
         handle, deviceStateVector, cuStateVecCudaDataType, nIndexBits, &expect,
         CUDA_R_64F, nullptr, matrix, cuStateVecCudaDataType,
-        CUSTATEVEC_MATRIX_LAYOUT_ROW, tgtsInt.data(), tgts.size(),
+        CUSTATEVEC_MATRIX_LAYOUT_ROW, tgts.data(), tgts.size(),
         cuStateVecComputeType, extraWorkspace, extraWorkspaceSizeInBytes));
     if (extraWorkspaceSizeInBytes)
       HANDLE_CUDA_ERROR(cudaFree(extraWorkspace));
@@ -447,18 +441,21 @@ public:
   /// @brief Compute the expected value from the observable matrix.
   cudaq::ExecutionResult observe(const cudaq::spin_op &op) override {
     // The op is on the following target bits.
-    std::set<std::size_t> targets;
+    std::vector<int> targets;
+    targets.reserve(op.num_qubits());
     op.for_each_term([&](cudaq::spin_op &term) {
       term.for_each_pauli(
-          [&](cudaq::pauli p, std::size_t idx) { targets.insert(idx); });
+          [&](cudaq::pauli p, std::size_t idx) { targets.push_back(static_cast<int>(idx)); });
     });
+    std::sort(targets.begin(), targets.end());
+    auto last = std::unique(targets.begin(), targets.end());
+    targets.erase(last, targets.end());
 
-    std::vector<std::size_t> targetsVec(targets.begin(), targets.end());
 
     // Get the matrix
     auto matrix = op.to_matrix();
     /// Compute the expectation value.
-    auto ee = getExpectationFromOperatorMatrix(matrix.data(), targetsVec);
+    auto ee = getExpectationFromOperatorMatrix(matrix.data(), targets);
     return cudaq::ExecutionResult({}, ee);
   }
 
