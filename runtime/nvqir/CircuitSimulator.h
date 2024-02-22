@@ -646,37 +646,8 @@ public:
 
   /// @brief Allocate a single qubit, return the qubit as a logical index
   std::size_t allocateQubit() override {
-    // Get a new qubit index
-    auto newIdx = tracker.getNextIndex();
-
-    if (isInBatchMode()) {
-      batchModeCurrentNumQubits++;
-      // In batch mode, we might already have an allocated state that
-      // has been set to |0..0>. We can reuse it as is, if the next qubit
-      // index is smaller than number of qubits of this allocated state.
-      if (newIdx < nQubitsAllocated)
-        return newIdx;
-    }
-
-    cudaq::info("Allocating new qubit with idx {} (nQ={}, dim={})", newIdx,
-                nQubitsAllocated, stateDimension);
-
-    // Increment the number of qubits and set
-    // the new state dimension
-    previousStateDimension = stateDimension;
-    nQubitsAllocated++;
-    stateDimension = calculateStateDim(nQubitsAllocated);
-
-    // Tell the subtype to grow the state representation
-    addQubitToState();
-
-    // May be that the state grows enough that we
-    // want to handle observation via sampling
-    if (executionContext)
-      executionContext->canHandleObserve = canHandleObserve();
-
-    // return the new qubit index
-    return newIdx;
+    auto qubit = allocateQubits(1);
+    return qubit[0];
   }
 
   /// @brief Allocate `count` qubits.
