@@ -115,23 +115,27 @@ protected:
     state = tmp;
   }
 
-  void applyGate(const GateApplicationTask &task) override {
-    auto matrix = toQppMatrix(task.matrix, task.targets.size());
-    // First, convert all of the qubit indices to big endian.
-    std::vector<std::size_t> controls;
-    for (auto index : task.controls) {
-      controls.push_back(convertQubitIndex(index));
-    }
-    std::vector<std::size_t> targets;
-    for (auto index : task.targets) {
-      targets.push_back(convertQubitIndex(index));
-    }
+  void applyGate(const std::string name,
+                 const std::vector<std::complex<double>> &matrix,
+                 const std::vector<std::size_t> &controls,
+                 const std::vector<std::size_t> &targets,
+                 const std::vector<double> &params) override {
+    // First convert the unitary matrix into Q++ matrix type
+    auto qpp_matrix = toQppMatrix(matrix, targets.size());
 
-    if (controls.empty()) {
-      state = qpp::apply(state, matrix, targets);
+    // Then, convert all of the qubit indices to big endian.
+    std::vector<std::size_t> qpp_controls, qpp_targets;
+    qpp_controls.reserve(controls.size()), qpp_targets.reserve(targets.size());
+    for (auto index : controls)
+      qpp_controls.push_back(convertQubitIndex(index));
+    for (auto index : targets)
+      qpp_targets.push_back(convertQubitIndex(index));
+
+    if (qpp_controls.empty()) {
+      state = qpp::apply(state, qpp_matrix, qpp_targets);
       return;
     }
-    state = qpp::applyCTRL(state, matrix, controls, targets);
+    state = qpp::applyCTRL(state, qpp_matrix, qpp_controls, qpp_targets);
   }
 
   /// @brief Set the current state back to the |0> state.

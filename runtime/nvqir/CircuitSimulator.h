@@ -324,24 +324,6 @@ protected:
   constexpr static const char observeSamplingEnvVar[] =
       "CUDAQ_OBSERVE_FROM_SAMPLING";
 
-  /// @brief A GateApplicationTask consists of a
-  /// matrix describing the quantum operation, a set of
-  /// possible control qubit indices, and a set of target indices.
-  struct GateApplicationTask {
-    const std::string operationName;
-    const std::vector<std::complex<ScalarType>> matrix;
-    const std::vector<std::size_t> controls;
-    const std::vector<std::size_t> targets;
-    const std::vector<ScalarType> parameters;
-    GateApplicationTask(const std::string &name,
-                        const std::vector<std::complex<ScalarType>> &m,
-                        const std::vector<std::size_t> &c,
-                        const std::vector<std::size_t> &t,
-                        const std::vector<ScalarType> &params)
-        : operationName(name), matrix(m), controls(c), targets(t),
-          parameters(params) {}
-  };
-
   /// @brief Get the name of the current circuit being executed.
   std::string getCircuitName() const { return currentCircuitName; }
 
@@ -581,20 +563,15 @@ protected:
     registerNameToMeasuredQubit.clear();
   }
 
-  /// @brief Add a new gate application task to the queue
-  void enqueueGate(const std::string name,
-                   const std::vector<std::complex<ScalarType>> &matrix,
-                   const std::vector<std::size_t> &controls,
-                   const std::vector<std::size_t> &targets,
-                   const std::vector<ScalarType> &params) {
-    applyGate({name, matrix, controls, targets, params});
-  }
-
   /// @brief This pure virtual method is meant for subtypes
   /// to implement, and its goal is to apply the gate described
   /// by the GateApplicationTask to the subtype-specific state
   /// data representation.
-  virtual void applyGate(const GateApplicationTask &task) = 0;
+  virtual void applyGate(const std::string name,
+                         const std::vector<std::complex<ScalarType>> &matrix,
+                         const std::vector<std::size_t> &controls,
+                         const std::vector<std::size_t> &targets,
+                         const std::vector<ScalarType> &params) = 0;
 
   /// @brief Provide a base-class method that can be invoked
   /// after every gate application and will apply any noise
@@ -859,7 +836,7 @@ public:
                                                        element.imag());
                      }
                    });
-    enqueueGate("custom", actual, controls, targets, {});
+    applyGate("custom", actual, controls, targets, {});
   }
 
   template <typename QuantumOperation>
@@ -872,7 +849,7 @@ public:
     // we're actually going to use it.
     if (cudaq::details::should_log(cudaq::details::LogLevel::info))
       cudaq::info(gateToString(gate.name(), controls, angles, targets));
-    enqueueGate(gate.name(), gate.getGate(angles), controls, targets, angles);
+    applyGate(gate.name(), gate.getGate(angles), controls, targets, angles);
   }
 
 #define CIRCUIT_SIMULATOR_ONE_QUBIT(NAME)                                      \
@@ -965,8 +942,8 @@ public:
         {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
         {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
         {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
-    enqueueGate("swap", matrix, ctrlBits,
-                std::vector<std::size_t>{srcIdx, tgtIdx}, {});
+    applyGate("swap", matrix, ctrlBits,
+              std::vector<std::size_t>{srcIdx, tgtIdx}, {});
   }
 
   bool mz(const std::size_t qubitIdx) override { return mz(qubitIdx, ""); }
