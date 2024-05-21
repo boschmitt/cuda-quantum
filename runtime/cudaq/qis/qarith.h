@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cudaq/qis/internal/adder.h"
 #include "cudaq/qis/qubit_qis.h"
 #include "cudaq/qis/qview.h"
 
@@ -68,6 +69,25 @@ inline void decrement(qview<2> qubits) {
   x(qubits); // Broadcast
   increment(qubits);
   x(qubits); // Broadcast
+}
+
+/// Interprets the two sets of qubtis, `a` and `b`, as integers and do in-place
+/// addition, b += a.
+inline void add(qview<2> a, qview<2> b, qubit &carry) {
+  internal::carry_ripple_adder_ttk(a, b, carry);
+}
+
+inline void two_complement(qview<2> qubits) {
+  x(qubits); // Broadcast
+  increment(qubits);
+}
+
+/// Interprets the two sets of qubtis, `a` and `b`, as integers and do in-place
+/// addition, b -= a.
+inline void sub(qview<2> a, qview<2> b, qubit &carry) {
+  two_complement(a);
+  internal::carry_ripple_adder_ttk(a, b, carry);
+  two_complement(a);
 }
 
 } // namespace cudaq

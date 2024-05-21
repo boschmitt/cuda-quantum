@@ -25,6 +25,15 @@ constexpr static int min_int(std::size_t bitwidth) {
   return -(1 << (bitwidth - 1));
 }
 
+static int convert(int value, std::size_t bitwidth) {
+  int max_int = (1 << (bitwidth - 1)) - 1;
+  value &= (1 << bitwidth) - 1;
+  if (value <= max_int)
+    return value;
+
+  return -((1 << bitwidth) - value);
+}
+
 //===----------------------------------------------------------------------===//
 
 CUDAQ_TEST(QubitArithTester, checkLoad) {
@@ -56,6 +65,46 @@ CUDAQ_TEST(QubitArithTester, checkInPlaceDecrement) {
   for (int v = max_int(kNUM_QUBITS); v-- > min_int(kNUM_QUBITS);) {
     cudaq::decrement(qs);
     ASSERT_EQ(mz_int(qs), v);
+  }
+}
+
+CUDAQ_TEST(QubitArithTester, checkInPlaceAdd) {
+  constexpr std::size_t kNUM_QUBITS = 4;
+
+  for (int a = min_int(kNUM_QUBITS); a < max_int(kNUM_QUBITS); ++a) {
+    for (int b = min_int(kNUM_QUBITS); b < max_int(kNUM_QUBITS); ++b) {
+      cudaq::qvector<2> qa(kNUM_QUBITS);
+      cudaq::qvector<2> qb(kNUM_QUBITS);
+      cudaq::qubit carry;
+
+      cudaq::load(qa, a);
+      cudaq::load(qb, b);
+
+      cudaq::add(qa, qb, carry);
+      ASSERT_EQ(mz_int(qa), a);
+      ASSERT_EQ(mz_int(qb), convert(a + b, kNUM_QUBITS))
+          << "a + b : " << a << " + " << b;
+    }
+  }
+}
+
+CUDAQ_TEST(QubitArithTester, checkInPlaceSub) {
+  constexpr std::size_t kNUM_QUBITS = 4;
+
+  for (int a = min_int(kNUM_QUBITS); a < max_int(kNUM_QUBITS); ++a) {
+    for (int b = min_int(kNUM_QUBITS); b < max_int(kNUM_QUBITS); ++b) {
+      cudaq::qvector<2> qa(kNUM_QUBITS);
+      cudaq::qvector<2> qb(kNUM_QUBITS);
+      cudaq::qubit carry;
+
+      cudaq::load(qa, a);
+      cudaq::load(qb, b);
+
+      cudaq::sub(qa, qb, carry);
+      ASSERT_EQ(mz_int(qa), a);
+      ASSERT_EQ(mz_int(qb), convert(b - a, kNUM_QUBITS))
+          << "b - a : " << b << " - " << a;
+    }
   }
 }
 
