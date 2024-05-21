@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cudaq/qis/internal/adder.h"
+#include "cudaq/qis/internal/carry1.h"
 #include "cudaq/qis/qubit_qis.h"
 #include "cudaq/qis/qview.h"
 
@@ -88,6 +89,28 @@ inline void sub(qview<2> a, qview<2> b, qubit &carry) {
   two_complement(a);
   internal::carry_ripple_adder_ttk(a, b, carry);
   two_complement(a);
+}
+
+/// Applies a less-than comparison between two integers encoded into qubits. It
+/// flips a target qubit based on the result of the comparison.
+///
+/// |0>|b>|a> = |(a < b)>|b>|a>
+inline void less_than(qview<2> a, qview<2> b, qubit &lt) {
+  x(b);
+  internal::carry1_ttk(a, b, lt);
+  x(b);
+  x(lt);
+  x<ctrl>(b.back(), lt);
+  x<ctrl>(a.back(), lt);
+}
+
+/// Applies a greater-equal comparison between two integers encoded into qubits.
+/// It flips a target qubit based on the result of the comparison.
+///
+/// |0>|b>|a> = |(a >= b)>|b>|a>
+inline void greater_equal(qview<2> a, qview<2> b, qubit &geq) {
+  less_than(a, b, geq);
+  x(geq);
 }
 
 } // namespace cudaq

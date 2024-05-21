@@ -108,4 +108,44 @@ CUDAQ_TEST(QubitArithTester, checkInPlaceSub) {
   }
 }
 
+CUDAQ_TEST(QubitArithTester, checkLessThan) {
+  constexpr std::size_t kNUM_QUBITS = 4;
+
+  for (int a = min_int(kNUM_QUBITS); a < max_int(kNUM_QUBITS); ++a) {
+    for (int b = min_int(kNUM_QUBITS); b < max_int(kNUM_QUBITS); ++b) {
+      cudaq::qvector<2> qa(kNUM_QUBITS);
+      cudaq::qvector<2> qb(kNUM_QUBITS);
+      cudaq::qubit result;
+
+      cudaq::load(qa, a);
+      cudaq::load(qb, b);
+
+      cudaq::less_than(qa, qb, result);
+      ASSERT_EQ(mz_int(qa), a);
+      ASSERT_EQ(mz_int(qb), b);
+      ASSERT_EQ(mz(result), a < b) << "a < b : " << a << " < " << b;
+    }
+  }
+}
+
+CUDAQ_TEST(QubitArithTester, checkGreaterEqual) {
+  constexpr std::size_t kNUM_QUBITS = 4;
+
+  for (int a = min_int(kNUM_QUBITS); a < max_int(kNUM_QUBITS); ++a) {
+    for (int b = min_int(kNUM_QUBITS); b < max_int(kNUM_QUBITS); ++b) {
+      cudaq::qvector<2> qa(kNUM_QUBITS);
+      cudaq::qvector<2> qb(kNUM_QUBITS);
+      cudaq::qubit result;
+
+      cudaq::load(qa, a);
+      cudaq::load(qb, b);
+
+      cudaq::greater_equal(qa, qb, result);
+      ASSERT_EQ(mz_int(qa), a);
+      ASSERT_EQ(mz_int(qb), b);
+      ASSERT_EQ(mz(result), a >= b) << "a >= b : " << a << " >= " << b;
+    }
+  }
+}
+
 #endif
