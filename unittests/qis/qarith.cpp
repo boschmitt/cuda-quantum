@@ -37,4 +37,26 @@ CUDAQ_TEST(QubitArithTester, checkLoad) {
   }
 }
 
+CUDAQ_TEST(QubitArithTester, checkInPlaceIncrement) {
+  constexpr std::size_t kNUM_QUBITS = 4;
+
+  cudaq::qvector<2> qs(kNUM_QUBITS);
+  cudaq::load(qs, min_int(kNUM_QUBITS));
+  for (int v = min_int(kNUM_QUBITS) + 1; v < max_int(kNUM_QUBITS); ++v) {
+    cudaq::increment(qs);
+    ASSERT_EQ(mz_int(qs), v);
+  }
+}
+
+CUDAQ_TEST(QubitArithTester, checkInPlaceDecrement) {
+  constexpr std::size_t kNUM_QUBITS = 4;
+
+  cudaq::qvector<2> qs(kNUM_QUBITS);
+  cudaq::load(qs, max_int(kNUM_QUBITS));
+  for (int v = max_int(kNUM_QUBITS); v-- > min_int(kNUM_QUBITS);) {
+    cudaq::decrement(qs);
+    ASSERT_EQ(mz_int(qs), v);
+  }
+}
+
 #endif

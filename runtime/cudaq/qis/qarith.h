@@ -50,4 +50,24 @@ inline void load(qview<2> veq, int value) {
   }
 }
 
+/// Interprets the sets of qubtis, `a`, as an integer and do in-place increment
+/// a += 1.
+inline void increment(qview<2> qubits) {
+  const std::size_t size = qubits.size();
+  for (std::size_t i = 1; i < size; ++i)
+    cudaq::control([](qubit &q) { x(q); }, qubits.front(size - i),
+                   qubits[size - i]);
+  // x<ctrl>(qubits.front(size - i), qubits[size - i]);
+  x(qubits[0]);
+}
+
+/// Interprets the sets of qubtis, `a`, as an integer and do in-place decrement
+/// a -= 1.
+inline void decrement(qview<2> qubits) {
+  // We implement decrement in terms of incrementing the one's complement form.
+  x(qubits); // Broadcast
+  increment(qubits);
+  x(qubits); // Broadcast
+}
+
 } // namespace cudaq
