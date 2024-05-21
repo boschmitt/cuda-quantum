@@ -15,7 +15,8 @@ namespace cudaq::internal {
 
 // Modified TTK ripple-carry: it computes only the carry out of a `add`
 // operation, and it assumes a carry-in or 1.
-inline void carry1_ttk(cudaq::qview<2> a, cudaq::qview<2> b, qubit &carry) {
+inline void __qpu__ carry1_ttk(cudaq::qview<2> a, cudaq::qview<2> b,
+                       qubit &carry) {
   assert(a.size() == b.size());
   int n = a.size();
 
@@ -58,6 +59,5 @@ inline void carry1_ttk(cudaq::qview<2> a, cudaq::qview<2> b, qubit &carry) {
   for (int i = 1; i < n; ++i)
     x<ctrl>(*a_carry[i], b[i]);
 }
-
 
 } // namespace cudaq::internal

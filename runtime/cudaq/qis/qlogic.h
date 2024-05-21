@@ -14,7 +14,7 @@
 
 namespace cudaq {
 
-inline void equal(qubit &a, qubit &b, qubit &result) {
+inline void __qpu__ equal(qubit &a, qubit &b, qubit &result) {
   x<ctrl>(a, b, result);
 
   x(a);
@@ -24,7 +24,7 @@ inline void equal(qubit &a, qubit &b, qubit &result) {
   x(b);
 }
 
-inline void not_equal(qubit &a, qubit &b, qubit &result) {
+inline void __qpu__ not_equal(qubit &a, qubit &b, qubit &result) {
   x(a);
   x<ctrl>(a, b, result);
   x(a);
@@ -34,11 +34,11 @@ inline void not_equal(qubit &a, qubit &b, qubit &result) {
   x(b);
 }
 
-inline void and_(qubit &a, qubit &b, qubit &result) {
+inline void __qpu__ and_(qubit &a, qubit &b, qubit &result) {
   x<ctrl>(a, b, result);
 }
 
-inline void or_(qubit &a, qubit &b, qubit &result) {
+inline void __qpu__ or_(qubit &a, qubit &b, qubit &result) {
   x(a, b); // Broadcast
   x<ctrl>(a, b, result);
   x(a, b); // Broadcast

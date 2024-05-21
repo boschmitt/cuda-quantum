@@ -19,7 +19,7 @@ namespace cudaq {
 ///
 /// Note: The qview is interpreted as a signed interger in two's complement
 /// form.
-inline int mz_int(qview<2> veq) {
+inline int __qpu__ mz_int(qview<2> veq)  {
   std::vector<measure_result> results = mz(veq);
 
   int result = 0;
@@ -44,7 +44,7 @@ inline int mz_int(qview<2> veq) {
 /// Note: Effectively this kernel applies an in-place XOR operation between the
 /// set of qubits and a constant, `value`. Thus, the integer value can only be
 /// correctly loaded into the set, if the qubits are in the zero state.
-inline void load(qview<2> veq, int value) {
+inline void __qpu__ load(qview<2> veq, int value)  {
   // TODO: make sure the value fits the vector.
   for (std::size_t i = 0, end = veq.size(); i < end; ++i) {
     if (value & (1 << i))
@@ -54,7 +54,7 @@ inline void load(qview<2> veq, int value) {
 
 /// Interprets the sets of qubtis, `a`, as an integer and do in-place increment
 /// a += 1.
-inline void increment(qview<2> qubits) {
+inline void  __qpu__ increment(qview<2> qubits) {
   const std::size_t size = qubits.size();
   for (std::size_t i = 1; i < size; ++i)
     cudaq::control([](qubit &q) { x(q); }, qubits.front(size - i),
@@ -65,7 +65,7 @@ inline void increment(qview<2> qubits) {
 
 /// Interprets the sets of qubtis, `a`, as an integer and do in-place decrement
 /// a -= 1.
-inline void decrement(qview<2> qubits) {
+inline void __qpu__ decrement(qview<2> qubits) {
   // We implement decrement in terms of incrementing the one's complement form.
   x(qubits); // Broadcast
   increment(qubits);
@@ -74,18 +74,18 @@ inline void decrement(qview<2> qubits) {
 
 /// Interprets the two sets of qubtis, `a` and `b`, as integers and do in-place
 /// addition, b += a.
-inline void add(qview<2> a, qview<2> b, qubit &carry) {
+inline void  __qpu__ add(qview<2> a, qview<2> b, qubit &carry) {
   internal::carry_ripple_adder_ttk(a, b, carry);
 }
 
-inline void two_complement(qview<2> qubits) {
+inline void __qpu__ two_complement(qview<2> qubits) {
   x(qubits); // Broadcast
   increment(qubits);
 }
 
 /// Interprets the two sets of qubtis, `a` and `b`, as integers and do in-place
 /// addition, b -= a.
-inline void sub(qview<2> a, qview<2> b, qubit &carry) {
+inline void __qpu__ sub(qview<2> a, qview<2> b, qubit &carry) {
   two_complement(a);
   internal::carry_ripple_adder_ttk(a, b, carry);
   two_complement(a);
@@ -95,7 +95,7 @@ inline void sub(qview<2> a, qview<2> b, qubit &carry) {
 /// flips a target qubit based on the result of the comparison.
 ///
 /// |0>|b>|a> = |(a < b)>|b>|a>
-inline void less_than(qview<2> a, qview<2> b, qubit &lt) {
+inline void __qpu__ less_than(qview<2> a, qview<2> b, qubit &lt) {
   x(b);
   internal::carry1_ttk(a, b, lt);
   x(b);
@@ -108,7 +108,7 @@ inline void less_than(qview<2> a, qview<2> b, qubit &lt) {
 /// It flips a target qubit based on the result of the comparison.
 ///
 /// |0>|b>|a> = |(a >= b)>|b>|a>
-inline void greater_equal(qview<2> a, qview<2> b, qubit &geq) {
+inline void __qpu__ greater_equal(qview<2> a, qview<2> b, qubit &geq) {
   less_than(a, b, geq);
   x(geq);
 }

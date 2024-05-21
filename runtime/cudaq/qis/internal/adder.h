@@ -20,8 +20,8 @@ namespace cudaq::internal {
 /// Takahashi, Yasuhiro, and Noboru Kunihiro. "A fast quantum circuit for
 /// addition with few qubits." Quantum Information & Computation 8.6 (2008):
 /// 636-649.
-inline void carry_ripple_adder_ttk(cudaq::qview<2> a, cudaq::qview<2> b,
-                                   qubit &carry) {
+inline void __qpu__ carry_ripple_adder_ttk(cudaq::qview<2> a, cudaq::qview<2> b,
+                                           qubit &carry) {
   assert(a.size() == b.size());
   int n = a.size();
 
