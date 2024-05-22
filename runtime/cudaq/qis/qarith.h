@@ -26,7 +26,8 @@ inline int __qpu__ mz_int(qview<2> veq)  {
   // Check whether the result is a negative integer. (Note: in two's complement
   // a number is negative if its LSB is one.)
   if (results.back()) {
-    result = ~result;
+    // TODO: result = ~result;
+    result = 0xFFFFFFFF;
     for (std::size_t i = 0, end = results.size(); i < end; ++i)
       if (!results[i])
         result ^= (1 << i);
