@@ -12,11 +12,9 @@
 
 std::vector<cudaq::complex> randomState(int numQubits) {
   std::vector<cudaq::complex> stateVec(1ULL << numQubits);
-  std::generate(stateVec.begin(), stateVec.end(), []() -> cudaq::complex {
-    thread_local std::default_random_engine
-        generator; // thread_local so we don't have to do any locking
-    thread_local std::normal_distribution<double> distribution(
-        0.0, 1.0); // mean = 0.0, stddev = 1.0
+  std::default_random_engine generator;
+  std::normal_distribution<double> distribution(/*mean=*/0.0, /*stddev=*/1.0);
+  std::generate(stateVec.begin(), stateVec.end(), [&]() -> cudaq::complex {
     return cudaq::complex(distribution(generator), distribution(generator));
   });
 
