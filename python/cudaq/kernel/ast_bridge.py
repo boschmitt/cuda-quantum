@@ -16,6 +16,7 @@ from collections import deque
 from cudaq.mlir._mlir_libs._quakeDialects import (
     cudaq_runtime, load_intrinsic, gen_vector_of_complex_constant,
     register_all_dialects)
+from cudaq.kernel2.code_generator import CodeGenerator
 from cudaq.mlir.dialects import arith, cc, complex, func, math, quake
 from cudaq.mlir.ir import (BoolAttr, Block, BlockArgument, Context, ComplexType,
                            DenseBoolArrayAttr, DenseI32ArrayAttr,
@@ -4270,12 +4271,12 @@ def compile_to_mlir(astModule, capturedDataStorage: CapturedDataStorage,
         'parentVariables'] if 'parentVariables' in kwargs else {}
 
     # Create the AST Bridge
-    bridge = PyASTBridge(capturedDataStorage,
-                         verbose=verbose,
-                         knownResultType=returnType,
-                         returnTypeIsFromPython=True,
-                         locationOffset=lineNumberOffset,
-                         capturedVariables=parentVariables)
+    bridge = CodeGenerator(capturedDataStorage,
+                           verbose=verbose,
+                           knownResultType=returnType,
+                           returnTypeIsFromPython=True,
+                           locationOffset=lineNumberOffset,
+                           capturedVariables=parentVariables)
 
     # First validate the arguments, make sure they are annotated
     bridge.validateArgumentAnnotations(astModule)
@@ -4321,10 +4322,9 @@ def compile_to_mlir(astModule, capturedDataStorage: CapturedDataStorage,
         if funcName != vis.kernelName and funcName in depKernels:
             # Build an AST Bridge and visit the dependent kernel
             # function. Provide the dependent kernel source location as well.
-            PyASTBridge(capturedDataStorage,
-                        existingModule=bridge.module,
-                        locationOffset=depKernels[funcName][1]).visit(
-                            depKernels[funcName][0])
+            CodeGenerator(capturedDataStorage,
+                          existingModule=bridge.module,
+                          locationOffset=depKernels[funcName][1]).visit(depKernels[funcName][0])
 
     # Build the MLIR Module for this kernel
     bridge.visit(astModule)
