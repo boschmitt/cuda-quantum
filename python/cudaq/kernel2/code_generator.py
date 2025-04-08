@@ -15,6 +15,7 @@ from textwrap import dedent
 from cudaq.mlir.ir import (
     Context,
     DictAttr,
+    DenseI32ArrayAttr,
     Block,
     BoolAttr,
     F32Type,
@@ -44,6 +45,10 @@ from .utils import ScopedTable
 #-------------------------------------------------------------------------------
 
 # TOOD: Perhaps find a better place to put these.
+
+# CC Dialect `ComputePtrOp` in C++ sets the dynamic index as `std::numeric_limits<int32_t>::min()`
+# (see CCOps.tc line 898). We'll duplicate that here by just setting it manually
+kDynamicPtrIndex: int = -2147483648
 
 def _isa(obj, cls):
   try:
@@ -375,7 +380,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         # TODO: Support fancier assignments. For now, we limit this to simple
         # <name> = <value>
-        if len(node.targets) > 1 or isinstance(node.value, ast.Tuple | ast.List):
+        if len(node.targets) > 1 or isinstance(node.value, ast.Tuple):
             self.diagnostic.emit_error(
                 node.lineno, node.col_offset,
                 f"Unsupported Assign node {str(node)}",
@@ -594,6 +599,27 @@ class CodeGenerator(ast.NodeVisitor):
                 size = quake.VeqSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
 
             extractFunctor = lambda idx: [quake.ExtractRefOp(quake.RefType.get(self.ctx), iter, -1, index=idx).result]
+        elif cc.StdvecType.isinstance(iter.type):
+            iterEleTy = cc.StdvecType.getElementType(iter.type)
+            size = cc.StdvecSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
+
+            def functor(idx):
+                elePtrTy = cc.PointerType.get(self.ctx, iterEleTy)
+                arrTy = cc.ArrayType.get(self.ctx, iterEleTy)
+                ptrArrTy = cc.PointerType.get(self.ctx, arrTy)
+                vecPtr = cc.StdvecDataOp(ptrArrTy, iter).result
+                eleAddr = cc.ComputePtrOp(
+                    elePtrTy, vecPtr, [idx],
+                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
+                                            context=self.ctx)).result
+                return [cc.LoadOp(eleAddr).result]
+
+            extractFunctor = functor
+        else:
+            self.diagnostic.emit_error(
+                node.lineno, node.col_offset,
+                f"Unsupported iterable type {iter.type}"
+            )
 
         
         int64_ty = IntegerType.get_signless(64, self.ctx)
@@ -710,6 +736,44 @@ class CodeGenerator(ast.NodeVisitor):
                 cc.ContinueOp([])
                 self.local_symbols.pop_scope()
 
+    def visit_List(self, node):
+        values =  [self.visit(elt) for elt in node.elts]
+
+        # Check if empty list
+        if not values:
+            return []
+
+        # Get first value's type
+        first_type = values[0].type if isinstance(values[0], IRValue) else type(values[0])
+
+        # Check if all values have same type
+        for value in values[1:]:
+            value_type = value.type if isinstance(value, IRValue) else type(value)
+            if value_type != first_type:
+                self.diagnostic.emit_error(
+                    getattr(node, "lineno", 0),
+                    getattr(node, "col_offset", 0),
+                    f"List elements must all have the same type. Found {first_type} and {value_type}",
+                )
+
+        int64_ty = IntegerType.get_signless(64, self.ctx)
+        arrSize = arith.ConstantOp(int64_ty, len(values)).result
+        arrTy = cc.ArrayType.get(self.ctx, first_type)
+        alloca = cc.AllocaOp(cc.PointerType.get(self.ctx, arrTy),
+                             TypeAttr.get(first_type),
+                             seqSize=arrSize).result
+
+        for i, v in enumerate(values):
+            eleAddr = cc.ComputePtrOp(
+                cc.PointerType.get(self.ctx, first_type), alloca,
+                [arith.ConstantOp(int64_ty, i).result],
+                DenseI32ArrayAttr.get([kDynamicPtrIndex],
+                                      context=self.ctx)).result
+            cc.StoreOp(v, eleAddr)
+
+        return cc.StdvecInitOp(cc.StdvecType.get(self.ctx, first_type), alloca,
+                               arrSize).result
+
     def visit_Module(self, node):
         assert len(node.body) == 1
         assert isinstance(node.body[0], ast.FunctionDef)
@@ -765,6 +829,20 @@ class CodeGenerator(ast.NodeVisitor):
         return_expr = self.visit(node.value)
         self.return_type = return_expr.type
         return_op([return_expr], loc=loc)
+
+    def visit_Subscript(self, node):
+        value = self.visit(node.value)
+        slice = self.visit(node.slice)
+        if quake.VeqType.isinstance(value.type):
+            return quake.ExtractRefOp(quake.RefType.get(self.ctx), value, -1, index=slice).result
+        elif cc.StdvecType.isinstance(value.type):
+            return cc.StdvecExtractOp(cc.StdvecType.getElementType(value.type), value, slice).result
+        else:
+            self.diagnostic.emit_error(
+                getattr(node, "lineno", 0),
+                getattr(node, "col_offset", 0),
+                f"Unsupported subscript type {value.type}"
+            )
 
     def visit_Tuple(self, node):
         return tuple(self.visit(elt) for elt in node.elts)
