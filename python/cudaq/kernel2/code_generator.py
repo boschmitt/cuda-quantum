@@ -16,6 +16,7 @@ from cudaq.mlir.ir import (
     Context,
     DictAttr,
     DenseI32ArrayAttr,
+    DenseI64ArrayAttr,
     Block,
     BoolAttr,
     F32Type,
@@ -34,8 +35,9 @@ from cudaq.mlir.ir import (
 )
 from cudaq.kernel.captured_data import CapturedDataStorage
 from cudaq.kernel.utils import globalKernelRegistry
-from cudaq.mlir.dialects import arith, cc, func, quake
+from cudaq.mlir.dialects import arith, cc, func, quake, math
 from cudaq.mlir._mlir_libs._quakeDialects import cudaq_runtime, register_all_dialects
+from .diagnostic import Diagnostic, DiagnosticSeverity, DiagnosticSpan
 from .diagnostic_emitter import DiagnosticEmitter
 from .type_converter import TypeConverter
 from .utils import ScopedTable
@@ -135,19 +137,25 @@ def _arith_cmpf_predicate_attr(predicate):
             return None
 
 
-class Value:
-    __slots__ = ('py_type', 'ir_value')
+class Symbol:
+    __slots__ = ('name', 'def_node', 'ir_type', 'ir_slot')
 
-    def __init__(self, py_type, ir_value):
-        self.py_type = py_type
-        self.ir_value = ir_value
+    def __init__(self, name):
+        self.name = name
+        self.def_node = None
+        self.ir_type = None
+        self.ir_slot = None
+
+    def __repr__(self):
+        return f"Symbol(name={self.name}, def_node={self.def_node}, ir_type={self.ir_type}, ir_slot={self.ir_slot})"
 
 class Range:
     __slots__ = ('start', 'step', 'stop')
 
     def __init__(self, *args):
-        self.start = 0
-        self.step = 1
+        self.start = None
+        self.step = None
+        self.stop = None
         if len(args) == 1:
             self.stop = args[0]
         elif len(args) == 2:
@@ -160,12 +168,84 @@ class Range:
         else:
             raise ValueError("Range requires 1 to 3 integer arguments")
 
+    def _mlir_materialize(self, loc):
+        with loc.context, loc:
+            int64_ty = IntegerType.get_signless(64)
+            zero = arith.ConstantOp(int64_ty, IntegerAttr.get(int64_ty, 0))
+            one = arith.ConstantOp(int64_ty, IntegerAttr.get(int64_ty, 1))
+
+            start = self.start if self.start else zero
+            step = self.step if self.step else one
+
+            # The total number of elements in the iterable
+            size = math.AbsIOp(arith.SubIOp(self.stop, start).result).result
+            if self.step:
+                size = arith.DivSIOp(size, math.AbsIOp(self.step).result).result
+
+            # Allocate an array of i64 of the total size
+            array_ty = cc.ArrayType.get(loc.context, int64_ty)
+            memory = cc.AllocaOp(cc.PointerType.get(loc.context, array_ty),
+                                TypeAttr.get(int64_ty),
+                                seqSize=size).result
+
+            # Now, we populate the array with the values. The idea is to build an
+            # array like: [start + 0*step, start + 1*step, start + 2*step, start + 3*step, ...]
+            loop = cc.LoopOp([int64_ty], [one], BoolAttr.get(False))
+
+            whileBlock = Block.create_at_start(loop.whileRegion, [int64_ty])
+            with InsertionPoint(whileBlock):
+                test = self._cmp_op(whileBlock.arguments[0], size, ast.Lt)
+                cc.ConditionOp(test, whileBlock.arguments)
+
+            bodyBlock = Block.create_at_start(loop.bodyRegion, [int64_ty])
+            with InsertionPoint(bodyBlock):
+                tmp = arith.MulIOp(bodyBlock.arguments[0], step).result
+                value = arith.AddIOp(start, tmp).result
+                element_addr = cc.ComputePtrOp(
+                    cc.PointerType.get(loc.context, int64_ty), memory,
+                    [bodyBlock.arguments[0]],
+                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
+                                        context=loc.context))
+
+                # Store the value in the array
+                cc.StoreOp(value, element_addr)
+
+            stepBlock = Block.create_at_start(loop.stepRegion, [int64_ty])
+            with InsertionPoint(stepBlock):
+                cc.ContinueOp([arith.AddIOp(stepBlock.arguments[0], one).result])
+
     # Add this method this class is a Iterable
     def __iter__(self):
         pass
 
     def __repr__(self):
         return f"Range(start={self.start}, stop={self.stop}, step={self.step})"
+
+class Enumerate:
+    __slots__ = ('iterable', 'start')
+
+    def __init__(self, iterable, start=None):
+        self.iterable = iterable
+        self.start = start
+
+    def __iter__(self):
+        pass
+
+    def __repr__(self):
+        return f"Enumerate(iterable={self.iterable}, start={self.start})"
+
+class List:
+    __slots__ = ('elements', 'type')
+
+    def __init__(self, elements):
+        self.elements = elements
+        self.type = f"List[{elements[0].type}]"
+
+    def __iter__(self):
+        return iter(self.elements)
+
+    def __repr__(self):
+        return f"List(elements={self.elements})"
 
 #-------------------------------------------------------------------------------
 # Builtin namespace
@@ -204,6 +284,10 @@ class Gate:
 
 
 builtin_namespace = {
+    # Python builtins
+    'range': Range,
+    'enumerate': Enumerate,
+    # CUDA-Q builtins    
     'cudaq.qvector': qvector,
     'cudaq.qubit': qubit,
     # One-target gates
@@ -269,12 +353,14 @@ class CodeGenerator(ast.NodeVisitor):
         self.disableNvqppPrefix = kwargs.get('disableNvqppPrefix', False)
         self.knownResultType = kwargs.get('knownResultType', None)
         self.verbose = kwargs.get('verbose', False)
+        self.source = kwargs.get('source', None)
 
-        self.diagnostic = DiagnosticEmitter(filename, line_number)
+        self.diagnostic = DiagnosticEmitter(filename, line_number, self.source)
         self.type_converter = TypeConverter(self.diagnostic, self.ctx)
 
         self.dependentCaptureVars = {}
         self.local_symbols = ScopedTable()
+        self.value_to_node = ScopedTable()
         self.return_type = None
 
     #---------------------------------------------------------------------------
@@ -282,25 +368,26 @@ class CodeGenerator(ast.NodeVisitor):
     #---------------------------------------------------------------------------
 
     def validateArgumentAnnotations(self, astModule):
-        """
-        Utility function for quickly validating that we have
-        all arguments annotated.
-        """
-
+        # TODO: Checking for type hints happen in various places python runtime.
+        #       We should probably do it in only one place. For now, I leaving it here
+        #       because this seems to be the first place.
         class ValidateArgumentAnnotations(ast.NodeVisitor):
-            """
-            Utility visitor for finding argument annotations
-            """
-
-            def __init__(self, bridge):
-                self.bridge = bridge
+            def __init__(self, code_generator):
+                self.code_generator = code_generator
 
             def visit_FunctionDef(self, node):
                 for arg in node.args.args:
-                    if arg.annotation == None:
-                        self.bridge.emitFatalError(
-                            'cudaq.kernel functions must have argument type annotations.',
-                            arg)
+                    if arg.annotation is None:
+                        diagnostic = Diagnostic(
+                            DiagnosticSeverity.ERROR,
+                            'Missing type annotation for kernel argument.',
+                        ).add_span(DiagnosticSpan.from_ast_node(
+                            arg,
+                            file=self.code_generator.diagnostic.filename,
+                            is_primary=True,
+                            label=f"Argument has no type annotation",
+                        ))
+                        self.code_generator.diagnostic.emit(diagnostic)
 
         ValidateArgumentAnnotations(self).visit(astModule)
 
@@ -349,6 +436,65 @@ class CodeGenerator(ast.NodeVisitor):
 
         return None
 
+    def _load_if_pointer(self, value):
+        if cc.PointerType.isinstance(value.type):
+            return cc.LoadOp(value).result
+        return value
+
+    def _materialize_value(self, value, loc):
+        if isinstance(value, List):
+            return self._materialize_list(value, loc)
+        elif isinstance(value, tuple):
+            return self._materialize_tuple(value, loc)
+        return value
+
+    def _materialize_list(self, values, loc):
+        values = [self._materialize_value(v, loc) for v in values]
+        # At this point, we know that all the values have the same type.
+        array_type = cc.ArrayType.get(self.ctx, values[0].type, len(values))
+        array_value = cc.UndefOp(array_type, loc=loc)
+        for i, value in enumerate(values):
+            array_value = cc.InsertValueOp(array_type, array_value, value, DenseI64ArrayAttr.get([i]), loc=loc)
+
+        return array_value.result
+        # buffer = cc.AllocaOp(cc.PointerType.get(self.ctx, array_type), TypeAttr.get(array_type), loc=loc).result
+        # cc.StoreOp(array_value, buffer, loc=loc)
+        # return buffer
+
+        # int64_ty = IntegerType.get_signless(64, self.ctx)
+        # arrSize = arith.ConstantOp(int64_ty, len(values)).result
+        # arrTy = cc.ArrayType.get(self.ctx, first_type)
+        # alloca = cc.AllocaOp(cc.PointerType.get(self.ctx, arrTy),
+        #                      TypeAttr.get(first_type),
+        #                      seqSize=arrSize).result
+
+        # for i, v in enumerate(values):
+        #     eleAddr = cc.ComputePtrOp(
+        #         cc.PointerType.get(self.ctx, first_type), alloca,
+        #         [arith.ConstantOp(int64_ty, i).result],
+        #         DenseI32ArrayAttr.get([kDynamicPtrIndex],
+        #                               context=self.ctx)).result
+        #     cc.StoreOp(v, eleAddr)
+
+        # return cc.StdvecInitOp(cc.StdvecType.get(self.ctx, first_type), alloca,
+        #                        arrSize).result
+
+    def _materialize_tuple(self, values, loc):
+        # Create a tuple type
+        tuple_type = cc.StructType.get(self.ctx, [t.type for t in values])
+        # Create a tuple value
+        tuple_value = cc.UndefOp(tuple_type, loc=loc)
+        for i, value in enumerate(values):
+            tuple_value = cc.InsertValueOp(tuple_type, tuple_value, value, DenseI64ArrayAttr.get([i]), loc=loc)
+        return tuple_value.result
+
+    def _bufferize_array(self, value, loc):
+        if cc.ArrayType.isinstance(value.type):
+            buffer = cc.AllocaOp(cc.PointerType.get(self.ctx, value.type), TypeAttr.get(value.type), loc=loc).result
+            cc.StoreOp(value, buffer, loc=loc)
+            return buffer
+        return value
+
     #---------------------------------------------------------------------------
     # Generic visiting
     #---------------------------------------------------------------------------
@@ -357,11 +503,15 @@ class CodeGenerator(ast.NodeVisitor):
         return super().visit(node)
 
     def generic_visit(self, node):
-        self.diagnostic.emit_error(
-            getattr(node, "lineno", 0),
-            getattr(node, "col_offset", 0),
-            f"Unsupported AST node {str(node)}",
-        )
+        diagnostic = Diagnostic(
+            DiagnosticSeverity.ERROR,
+            f"Unsupported AST node {str(node)}"
+        ).add_span(DiagnosticSpan.from_ast_node(
+            node,
+            file=self.diagnostic.filename,
+            is_primary=True
+        ))
+        self.diagnostic.emit(diagnostic)
 
     #---------------------------------------------------------------------------
 
@@ -378,46 +528,68 @@ class CodeGenerator(ast.NodeVisitor):
         # TODO: Make sure we are not assigning a nonlocal or global.
         loc = self._create_location(node)
 
-        # TODO: Support fancier assignments. For now, we limit this to simple
-        # <name> = <value>
-        if len(node.targets) > 1 or isinstance(node.value, ast.Tuple):
-            self.diagnostic.emit_error(
-                node.lineno, node.col_offset,
-                f"Unsupported Assign node {str(node)}",
-            )
+        # TODO: Support chained assignment, e.g. `a = b = 1`
+        if len(node.targets) > 1:
+            diagnostic = Diagnostic(
+                DiagnosticSeverity.ERROR,
+                f"Unsupported chained assignment.",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node,
+                file=self.diagnostic.filename,
+                is_primary=True,
+            ))
+            self.diagnostic.emit(diagnostic)
+            return
 
-        if not isinstance(node.targets[0], ast.Name):
-            self.diagnostic.emit_error(
-                node.lineno, node.col_offset,
-                f"Unsupported Assign node {str(node)}",
-            )
+        # TODO: Support unpacking assignment, e.g. `a, b = 1, 2`
+        if isinstance(node.targets[0], ast.Tuple):
+            diagnostic = Diagnostic(
+                DiagnosticSeverity.ERROR,
+                f"Unsupported unpacking assignment.",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node.targets[0],
+                file=self.diagnostic.filename,
+                is_primary=True,
+                label=f"The target of the assignment is a tuple"
+            ))
+            self.diagnostic.emit(diagnostic)
 
         # Symbol resolution on assigment is a bit different
-        name = node.targets[0].id
         target = self.visit(node.targets[0])
         value = self.visit(node.value)
 
-        # If `value` is not a MLIR value, then we are dealing with some python
-        # object that has not been represented in the IR, thus we just store it
-        # as-is in the local symbols table.
+        # Make sure we are dealing with an IRValue
+        value = self._materialize_value(value, self._create_location(node.value))
         if not isinstance(value, IRValue):
-            self.local_symbols.insert(name, value)
-            return
+            diagnostic = Diagnostic(
+                DiagnosticSeverity.ERROR,
+                f"Cannot assign a value of type {type(value)} to a name",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node.value,
+                file=self.diagnostic.filename,
+                is_primary=True,
+            ))
+            self.diagnostic.emit(diagnostic)
 
-        if not target:
-            # We are seeing the identifier for the first time. Thus we need to 
-            # create a name, which is an identifier that bind to an object.
+        if not target.def_node:
+            if cc.PointerType.isinstance(value.type):
+                value = cc.LoadOp(value).result
+
+            # We are seeing the identifier for the first time. 
+            target.def_node = node
+            target.ir_type = value.type
 
             # When dealing with quantum types, we just update the local symbols.
             if quake.RefType.isinstance(value.type) or quake.VeqType.isinstance(value.type):
-                self.local_symbols.insert(name, value)
+                target.ir_slot = value
                 return
 
             # We are creating a new name
             memory = self._cc_alloca(value.type, loc)
-            self.local_symbols.insert(name, memory)
-            target = memory
-        elif quake.RefType.isinstance(target.type):
+            target.ir_slot = memory
+            self.value_to_node.insert(memory,  target)
+
+        elif quake.RefType.isinstance(target.ir_type):
             # Quantum types are not SSA values in the IR, they are memory and 
             # we don't have an operation capable of adding an extra level of 
             # indirection here.
@@ -425,18 +597,27 @@ class CodeGenerator(ast.NodeVisitor):
                 node.lineno, node.col_offset,
                 f"Variables of a quantum type are immutable",
             )
-        elif cc.PointerType.isinstance(target.type):
+        elif target.ir_type != value.type:
             # Check whether types of the existing target and the value are the
             # same. If not, then we need to allocate a new memory and re-assign
             # the name.
-            type_ = cc.PointerType.getElementType(target.type)
-            if type_ != value.type:
-                self.diagnostic.emit_error(
-                    node.lineno, node.col_offset,
-                    f"Cannot assing a value of type {value.type} to a name that previously contained a value of type {type_}",
-                )
+            diagnostic = Diagnostic(
+                DiagnosticSeverity.ERROR,
+                f"Cannot assign a value of type {value.type} to a name that previously contained a value of type {target.ir_type}",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node,
+                file=self.diagnostic.filename,
+                is_primary=True,
+                label=f"Trying to assign a value of type {value.type} to a variable of type {target.ir_type}"
+            )).add_span(DiagnosticSpan.from_ast_node(
+                target.def_node,
+                file=self.diagnostic.filename,
+                is_primary=True,
+                label=f"'{target.name}' is defined here"
+            ))
+            self.diagnostic.emit(diagnostic)
 
-        cc.StoreOp(value, target, loc=loc)
+        cc.StoreOp(value, target.ir_slot, loc=loc)
 
     def visit_Attribute(self, node):
         # Avoid recursing in the cases where we have "foo.bar.zaz"
@@ -459,7 +640,7 @@ class CodeGenerator(ast.NodeVisitor):
         full_name = '.'.join(reversed(chain))
         return self.visit(ast.Name(full_name, ast.Load(), lineno=node.lineno, col_offset=node.col_offset))
 
-        # TODO: In the future, we should do something likethis:
+        # TODO: In the future, we should do something like this:
         # obj = self.visit(new_node)
         # for attr in reversed(chain):
         #     # Using subscript is faster than `getattr` for dict.
@@ -470,9 +651,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         # return obj
 
-    def visit_BinOp(self, node):
-        left = self.visit(node.left)
-        right = self.visit(node.right)
+    def visit_BinOp(self, node) -> IRValue:
+        left = self._load_if_pointer(self.visit(node.left))
+        right = self._load_if_pointer(self.visit(node.right))
 
         if isinstance(node.op, (ast.Add, ast.Sub)):
             right = self.type_converter.coerce_value_type(left.type, right)
@@ -503,12 +684,12 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Break(self, node):
         # TODO: Handle edge cases? This statement only make sense with an 
         # ancestor scope is a loop, `for` or `while`
-        cc.UnwindBreakOp([])
+        cc.UnwindBreakOp([], loc=self._create_location(node))
 
     def visit_Continue(self, node):
         # TODO: Handle edge cases? This statement only make sense with an 
         # ancestor scope is a loop, `for` or `while`
-        cc.UnwindContinueOp([])
+        cc.UnwindContinueOp([], loc=self._create_location(node))
 
     def visit_Call(self, node):
         # FIXME: This a big hack, we need it because attributes are not handled properly.
@@ -546,7 +727,7 @@ class CodeGenerator(ast.NodeVisitor):
             f"Unsupported call {ast.unparse(node)}",
         )
 
-    def visit_Compare(self, node):
+    def visit_Compare(self, node) -> IRValue:
         # TODO: For now, allow a single comparison only.
         if len(node.comparators) != 1 or len(node.ops) != 1:
             self.diagnostic.emit_error(
@@ -570,7 +751,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         return self._cmp_op(left, right, cmp_op)
 
-    def visit_Constant(self, node):
+    def visit_Constant(self, node) -> IRValue:
         loc = self._create_location(node)
         ty = self.type_converter.convert_type(type(node.value))
         return arith.ConstantOp(ty, node.value, loc=loc).result
@@ -591,40 +772,75 @@ class CodeGenerator(ast.NodeVisitor):
         # be queried for its size.
 
         iter = self.visit(node.iter)
-        if quake.VeqType.isinstance(iter.type):
-            size = quake.VeqType.getSize(iter.type)
-            if quake.VeqType.hasSpecifiedSize(iter.type):
-                size = arith.ConstantOp(IntegerType.get_signless(64, self.ctx), size).result
-            else:
-                size = quake.VeqSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
+        self.local_symbols.push_scope()
+        targets = self.visit(node.target)
+        if isinstance(targets, Symbol):
+            targets = [targets]
 
-            extractFunctor = lambda idx: [quake.ExtractRefOp(quake.RefType.get(self.ctx), iter, -1, index=idx).result]
-        elif cc.StdvecType.isinstance(iter.type):
-            iterEleTy = cc.StdvecType.getElementType(iter.type)
-            size = cc.StdvecSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
-
-            def functor(idx):
-                elePtrTy = cc.PointerType.get(self.ctx, iterEleTy)
-                arrTy = cc.ArrayType.get(self.ctx, iterEleTy)
-                ptrArrTy = cc.PointerType.get(self.ctx, arrTy)
-                vecPtr = cc.StdvecDataOp(ptrArrTy, iter).result
-                eleAddr = cc.ComputePtrOp(
-                    elePtrTy, vecPtr, [idx],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                            context=self.ctx)).result
-                return [cc.LoadOp(eleAddr).result]
-
-            extractFunctor = functor
-        else:
-            self.diagnostic.emit_error(
-                node.lineno, node.col_offset,
-                f"Unsupported iterable type {iter.type}"
-            )
-
-        
         int64_ty = IntegerType.get_signless(64, self.ctx)
-        start = arith.ConstantOp(int64_ty, 0).result
-        step = arith.ConstantOp(int64_ty, 1).result
+        start = None
+        step = None
+        size = None
+        extractFunctor = None
+        if isinstance(iter, Range):
+            start = iter.start if iter.start else arith.ConstantOp(int64_ty, 0).result
+            size = iter.stop
+            step = iter.step if iter.step else arith.ConstantOp(int64_ty, 1).result
+            extractFunctor = lambda idx: [idx]
+        else:
+            iter = self._materialize_value(iter, self._create_location(node.iter))
+            # FIXME: This is a hack. We need array to be in a buffer to be able to extract elements.
+            iter = self._bufferize_array(iter, self._create_location(node.iter))
+            if isinstance(iter, IRValue):
+                start = arith.ConstantOp(int64_ty, 0).result
+                step = arith.ConstantOp(int64_ty, 1).result
+                if quake.VeqType.isinstance(iter.type):
+                    size = quake.VeqType.getSize(iter.type)
+                    if quake.VeqType.hasSpecifiedSize(iter.type):
+                        size = arith.ConstantOp(IntegerType.get_signless(64, self.ctx), size).result
+                    else:
+                        size = quake.VeqSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
+
+                    extractFunctor = lambda idx: [quake.ExtractRefOp(quake.RefType.get(self.ctx), iter, -1, index=idx).result]
+                elif cc.PointerType.isinstance(iter.type):
+                    array_type = cc.PointerType.getElementType(iter.type)
+                    element_type = cc.ArrayType.getElementType(array_type)
+                    size = arith.ConstantOp(IntegerType.get_signless(64, self.ctx), cc.ArrayType.getSize(array_type)).result
+
+                    def functor(idx):
+                        address = cc.ComputePtrOp(
+                            cc.PointerType.get(self.ctx, element_type), iter,
+                            [idx], DenseI32ArrayAttr.get([kDynamicPtrIndex])
+                        ).result
+                        return [cc.LoadOp(address).result]
+
+                    extractFunctor = functor
+                elif cc.StdvecType.isinstance(iter.type):
+                    iterEleTy = cc.StdvecType.getElementType(iter.type)
+                    size = cc.StdvecSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
+
+                    def functor(idx):
+                        elePtrTy = cc.PointerType.get(self.ctx, iterEleTy)
+                        arrTy = cc.ArrayType.get(self.ctx, iterEleTy)
+                        ptrArrTy = cc.PointerType.get(self.ctx, arrTy)
+                        vecPtr = cc.StdvecDataOp(ptrArrTy, iter).result
+                        eleAddr = cc.ComputePtrOp(
+                            elePtrTy, vecPtr, [idx],
+                            DenseI32ArrayAttr.get([kDynamicPtrIndex],
+                                                    context=self.ctx)).result
+                        return [cc.LoadOp(eleAddr).result]
+
+                    extractFunctor = functor
+                else:
+                    diagnostic = Diagnostic(
+                        DiagnosticSeverity.ERROR,
+                        f"Unsupported iterable type {iter.type}"
+                    ).add_span(DiagnosticSpan.from_ast_node(
+                        node.iter,
+                        file=self.diagnostic.filename,
+                        is_primary=True,
+                    ))
+                    self.diagnostic.emit(diagnostic)
 
         loop = cc.LoopOp([int64_ty], [start], BoolAttr.get(False))
 
@@ -635,31 +851,44 @@ class CodeGenerator(ast.NodeVisitor):
 
         bodyBlock = Block.create_at_start(loop.bodyRegion, [int64_ty])
         with InsertionPoint(bodyBlock):
-            self.local_symbols.push_scope()
-            targets = [node.target.id] if isinstance(node.target, ast.Name) else [elt.id for elt in node.target.elts]
             values = extractFunctor(bodyBlock.arguments[0])
             for target, value in zip(targets, values):
-                self.local_symbols.insert(target, value)
+                print(target)
+                if target.ir_slot is None:
+                    target.ir_type = value.type
+                    target.ir_slot = self._cc_alloca(value.type, self._create_location(node.target))
+                    cc.StoreOp(value, target.ir_slot, loc=self._create_location(node.target))
+                    self.local_symbols.insert(target, target)
+                else:
+                    if target.ir_type != value.type:
+                        diagnostic = Diagnostic(
+                            DiagnosticSeverity.ERROR,
+                            f"Cannot assign a value of type {value.type} to a name that previously contained a value of type {target.ir_type}"
+                        ).add_span(DiagnosticSpan.from_ast_node(
+                            node.target,
+                            file=self.diagnostic.filename,
+                        ))
+                        self.diagnostic.emit(diagnostic)
+                    cc.StoreOp(value, target.ir_slot, loc=self._create_location(node.target))
             for stmt in node.body:
                 self.visit(stmt)
             cc.ContinueOp(bodyBlock.arguments)
-            self.local_symbols.pop_scope()
 
         stepBlock = Block.create_at_start(loop.stepRegion, [int64_ty])
         with InsertionPoint(stepBlock):
             incr = arith.AddIOp(stepBlock.arguments[0], step).result
             cc.ContinueOp([incr])
 
+        self.local_symbols.pop_scope()
+
     def visit_FunctionDef(self, node):
         print(ast.dump(node, indent=4))
 
         # Process arguments
-        args = []
         # TODO: This attribute is required by users of the code generator.
         #       We not have it in this way.
         self.argTypes = []
         for arg in node.args.args:
-            args.append(arg.arg)
             if arg.annotation is None:
                 self.diagnostic.emit_error(
                     arg.lineno, arg.col_offset,
@@ -672,14 +901,10 @@ class CodeGenerator(ast.NodeVisitor):
 
         # It is a bit weird to have to set this attribute in the bridge instead of having
         # the compiler to figure it out
-        attr = DictAttr.get(
-            {
-                name:
-                    StringAttr.get(
-                        f'{name}_PyKernelEntryPointRewrite',
-                        context=self.ctx)
-            },
-            context=self.ctx)
+        attr = DictAttr.get({
+            name: StringAttr.get(f'{name}_PyKernelEntryPointRewrite', context=self.ctx)
+        }, context=self.ctx)
+
         self.module.operation.attributes['quake.mangled_name_map'] = attr
 
         # Create `func` operation within the MLIR module
@@ -690,9 +915,17 @@ class CodeGenerator(ast.NodeVisitor):
             func_op.attributes["cudaq-kernel"] = UnitAttr.get()
 
             entry_block = func_op.add_entry_block()
-            for arg_name, arg in zip(args, entry_block.arguments):
-                self.local_symbols.insert(arg_name, arg)
             with InsertionPoint(entry_block):
+                # Create slots for the arguments
+                # TODO: There are arguments that don't need slots, e.g. quantum types.
+                for arg, block_arg in zip(node.args.args, entry_block.arguments):
+                    symbol = Symbol(arg.arg)
+                    symbol.ir_type = block_arg.type
+                    arg_loc = self._create_location(arg)
+                    symbol.ir_slot = self._cc_alloca(block_arg.type, arg_loc)
+                    cc.StoreOp(block_arg, symbol.ir_slot, loc=arg_loc)
+                    self.local_symbols.insert(arg.arg, symbol)
+
                 for stmt in node.body:
                     if isinstance(stmt, ast.FunctionDef):
                         self.diagnostic.emit_error(
@@ -737,42 +970,30 @@ class CodeGenerator(ast.NodeVisitor):
                 self.local_symbols.pop_scope()
 
     def visit_List(self, node):
-        values =  [self.visit(elt) for elt in node.elts]
+        values = [self.visit(elt) for elt in node.elts]
 
         # Check if empty list
         if not values:
             return []
 
         # Get first value's type
-        first_type = values[0].type if isinstance(values[0], IRValue) else type(values[0])
+        first_type = values[0].type
 
         # Check if all values have same type
         for value in values[1:]:
-            value_type = value.type if isinstance(value, IRValue) else type(value)
+            value_type = value.type
             if value_type != first_type:
-                self.diagnostic.emit_error(
-                    getattr(node, "lineno", 0),
-                    getattr(node, "col_offset", 0),
+                diagnostic = Diagnostic(
+                    DiagnosticSeverity.ERROR,
                     f"List elements must all have the same type. Found {first_type} and {value_type}",
-                )
+                ).add_span(DiagnosticSpan.from_ast_node(
+                    node,
+                    file=self.diagnostic.filename,
+                    is_primary=True,
+                ))
+                self.diagnostic.emit(diagnostic)
 
-        int64_ty = IntegerType.get_signless(64, self.ctx)
-        arrSize = arith.ConstantOp(int64_ty, len(values)).result
-        arrTy = cc.ArrayType.get(self.ctx, first_type)
-        alloca = cc.AllocaOp(cc.PointerType.get(self.ctx, arrTy),
-                             TypeAttr.get(first_type),
-                             seqSize=arrSize).result
-
-        for i, v in enumerate(values):
-            eleAddr = cc.ComputePtrOp(
-                cc.PointerType.get(self.ctx, first_type), alloca,
-                [arith.ConstantOp(int64_ty, i).result],
-                DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                      context=self.ctx)).result
-            cc.StoreOp(v, eleAddr)
-
-        return cc.StdvecInitOp(cc.StdvecType.get(self.ctx, first_type), alloca,
-                               arrSize).result
+        return List(values)
 
     def visit_Module(self, node):
         assert len(node.body) == 1
@@ -782,29 +1003,32 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Name(self, node):
         # The ast.Name node has a context that is either `load` or `store`.
         if type(node.ctx) is ast.Store:
-            # In the case of a store, we are either (1) creating a new name or
-            # (2) re-assigning a name to a new value.
-            return self.local_symbols.lookup(node.id)
+            # In the case of a store, we are either:
+            #   (1) creating a new name or
+            #   (2) re-assigning a name to a new value.
+            return self.local_symbols.lookup_or_insert(node.id, Symbol(node.id))
 
         if node.id in builtin_namespace:
             return builtin_namespace[node.id]
 
-        value = self.local_symbols.lookup(node.id)
-        if value:
-            if isinstance(value, IRValue):
-                type_ = value.type
-                if cc.PointerType.isinstance(type_):
-                    type_ = cc.PointerType.getElementType(type_)
-                    loc = self._create_location(node)
-                    return self._cc_load(value, loc=loc)
-            return value
-
+        symbol = self.local_symbols.lookup(node.id)
+        if symbol:
+            loc = self._create_location(node)
+            # TODO: Rethink this, it makes handling of arrays a bit awkward.
+            if cc.ArrayType.isinstance(symbol.ir_type):
+                return symbol.ir_slot
+            return self._cc_load(symbol.ir_slot, loc=loc)
 
         # When in the `load` context, not finding the symbol is a fatal error.
-        self.diagnostic.emit_error(
-            node.lineno, node.col_offset,
-            f"Unknown variable {node.id}"
-        )
+        diagnostic = Diagnostic(
+            DiagnosticSeverity.ERROR,
+            f"Unknown name '{node.id}'",
+        ).add_span(DiagnosticSpan.from_ast_node(
+            node,
+            file=self.diagnostic.filename,
+            is_primary=True,
+        ))
+        self.diagnostic.emit(diagnostic)
 
     def visit_Return(self, node):
         # Check whether we need to return from the kernel scope or some inner.
@@ -827,22 +1051,77 @@ class CodeGenerator(ast.NodeVisitor):
             return
 
         return_expr = self.visit(node.value)
+        if not isinstance(return_expr, IRValue):
+            diagnostic = Diagnostic(
+                DiagnosticSeverity.ERROR,
+                "Unsupported return type",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node.value,
+                file=self.diagnostic.filename,
+                is_primary=True,
+                label=f"The value has type {type(return_expr)}"
+            ))
+            self.diagnostic.emit(diagnostic)
+            return
+
+        return_expr = self._load_if_pointer(return_expr)
         self.return_type = return_expr.type
         return_op([return_expr], loc=loc)
 
     def visit_Subscript(self, node):
+        # The ast.Subscript node has a context that is either `load` or `store`.
         value = self.visit(node.value)
         slice = self.visit(node.slice)
+
         if quake.VeqType.isinstance(value.type):
             return quake.ExtractRefOp(quake.RefType.get(self.ctx), value, -1, index=slice).result
-        elif cc.StdvecType.isinstance(value.type):
+        if cc.PointerType.isinstance(value.type):
+            array_type = cc.PointerType.getElementType(value.type)
+            element_type = cc.ArrayType.getElementType(array_type)
+            address = cc.ComputePtrOp(
+                cc.PointerType.get(self.ctx, element_type), value,
+                [slice], DenseI32ArrayAttr.get([kDynamicPtrIndex])
+            ).result
+            if type(node.ctx) is ast.Store:
+                target = self.value_to_node.lookup(value)
+                symbol = Symbol(f"{target.name}")
+                symbol.def_node = target.def_node
+                symbol.ir_type = element_type
+                symbol.ir_slot = address
+                return symbol
+            return address
+        if cc.StdvecType.isinstance(value.type):
             return cc.StdvecExtractOp(cc.StdvecType.getElementType(value.type), value, slice).result
-        else:
-            self.diagnostic.emit_error(
-                getattr(node, "lineno", 0),
-                getattr(node, "col_offset", 0),
-                f"Unsupported subscript type {value.type}"
-            )
+        if cc.StructType.isinstance(value.type):
+            # TODO: We cannot generally support tuples since CC has no way to extract dynamic elements.
+            # Check if the slice is a constant that we can use for static extraction.
+            if isinstance(slice.owner.opview, arith.ConstantOp) and IntegerAttr.isinstance(slice.owner.opview.value):
+                slice = IntegerAttr(slice.owner.opview.value).value
+            else:
+                diagnostic = Diagnostic(
+                    DiagnosticSeverity.ERROR,
+                    f"Unsupported dynamic subscript operation on tuple"
+                ).add_span(DiagnosticSpan.from_ast_node(
+                    node.slice,
+                    file=self.diagnostic.filename,
+                    is_primary=True,
+                    label=f"Could not statically infer value"
+                ))
+                self.diagnostic.emit(diagnostic)
+
+            element_types = cc.StructType.getTypes(value.type)
+            return cc.ExtractValueOp(element_types[slice], value, [], DenseI32ArrayAttr.get([slice])).result
+
+        diagnostic = Diagnostic(
+            DiagnosticSeverity.ERROR,
+            f"Unsupported subscript operation on a value of type {value.type}"
+        ).add_span(DiagnosticSpan.from_ast_node(
+            node.value,
+            file=self.diagnostic.filename,
+            is_primary=True,
+            label=f"The value has type {value.type}"
+        ))
+        self.diagnostic.emit(diagnostic)
 
     def visit_Tuple(self, node):
         return tuple(self.visit(elt) for elt in node.elts)
@@ -865,4 +1144,3 @@ class CodeGenerator(ast.NodeVisitor):
             # FIXME: Check for terminator ?
             cc.ContinueOp([])
             self.local_symbols.pop_scope()
-
