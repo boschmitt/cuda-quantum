@@ -214,6 +214,7 @@ class PyKernelDecorator(object):
         self.module, self.argTypes, extraMetadata = compile_to_mlir(
             self.astModule,
             self.capturedDataStorage,
+            source=self.funcSrc,
             verbose=self.verbose,
             returnType=self.returnType,
             location=self.location,

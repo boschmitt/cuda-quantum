@@ -4267,6 +4267,7 @@ def compile_to_mlir(astModule, capturedDataStorage: CapturedDataStorage,
     verbose = 'verbose' in kwargs and kwargs['verbose']
     returnType = kwargs['returnType'] if 'returnType' in kwargs else None
     lineNumberOffset = kwargs['location'] if 'location' in kwargs else ('', 0)
+    source = kwargs['source'] if 'source' in kwargs else None
     parentVariables = kwargs[
         'parentVariables'] if 'parentVariables' in kwargs else {}
 
@@ -4276,7 +4277,8 @@ def compile_to_mlir(astModule, capturedDataStorage: CapturedDataStorage,
                            knownResultType=returnType,
                            returnTypeIsFromPython=True,
                            locationOffset=lineNumberOffset,
-                           capturedVariables=parentVariables)
+                           capturedVariables=parentVariables,
+                           source=source)
 
     # First validate the arguments, make sure they are annotated
     bridge.validateArgumentAnnotations(astModule)
