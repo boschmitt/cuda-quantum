@@ -56,6 +56,14 @@ class ScopedTable:
                 return value
         return None
 
+    def lookup_or_insert(self, name, default_value):
+        for scope in reversed(self.scopes):
+            value = scope.get(name)
+            if value is not None:
+                return value
+        self.current_scope[name] = default_value
+        return self.current_scope[name]
+
     def update(self, name, value):
         for scope in reversed(self.scopes):
             if name in scope:
