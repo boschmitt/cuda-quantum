@@ -200,6 +200,17 @@ void registerCCDialectAndTypes(py::module &m) {
             return wrap(casted.getElementType());
           })
       .def_classmethod(
+          "getSize",
+          [](py::object cls, MlirType type) {
+            auto ty = unwrap(type);
+            auto casted = ty.dyn_cast<cudaq::cc::ArrayType>();
+            if (!casted)
+              throw std::runtime_error(
+                  "invalid type passed to ArrayType.getSize(), must be a "
+                  "cc.array type.");
+            return casted.getSize();
+          })
+      .def_classmethod(
           "get",
           [](py::object cls, MlirContext ctx, MlirType elementType,
              std::int64_t size) {
