@@ -216,6 +216,7 @@ class PyKernelDecorator(object):
             self.astModule,
             self.metadata,
             self.capturedDataStorage,
+            source=self.funcSrc,
             verbose=self.verbose,
             returnType=self.returnType,
             location=self.location,
