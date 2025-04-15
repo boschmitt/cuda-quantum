@@ -111,9 +111,18 @@ class TypeConverter:
     def coerce_value_type(self, ty: Type, value: Value) -> Value:
         result = value
         # TODO: Complex type
-        # TODO: Integer types of different sizes
         # TODO: Maybe emit warning when narrowing, e.g. F64 -> F32
-        if F64Type.isinstance(ty):
+        if IntegerType.isinstance(ty) and IntegerType.isinstance(value.type):
+            ty = IntegerType(ty)
+            value_ty = IntegerType(value.type)
+            if ty.width > value_ty.width:
+                if value_ty.is_signed:
+                    result = arith.ExtSIOp(ty, value).result
+                else:
+                    result = arith.ExtUIOp(ty, value).result
+            elif ty.width < value_ty.width:
+                result = arith.TruncIOp(ty, value).result
+        elif F64Type.isinstance(ty):
             if F32Type.isinstance(value.type):
                 result = arith.ExtFOp(ty, value).result
             elif IntegerType.isinstance(value.type):

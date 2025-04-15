@@ -282,6 +282,21 @@ class Gate:
         # Ouch, need to account for the possibility of returning wires
         self.op([], parameters, controls, targets, is_adj=is_adjoint ^ self.is_adjoint, loc=loc)
 
+class Measurement:
+    __slots__ = ('op', 'register_name')
+
+    def __init__(self, name, *, register_name=None):
+        self.op = getattr(quake, '{}Op'.format(name.title()))
+        self.register_name = register_name
+
+    def _mlir_materialize(self, targets, loc):
+        measure_type = quake.MeasureType.get(loc.context)
+        result_type = IntegerType.get_signless(1)
+        if len(targets) > 1 or quake.VeqType.isinstance(targets[0].type):
+            measure_type = cc.StdvecType.get(loc.context, measure_type)
+            result_type = cc.StdvecType.get(loc.context, result_type)
+        measure_result = self.op(measure_type, [], targets, loc=loc).result
+        return quake.DiscriminateOp(result_type, measure_result, loc=loc).result
 
 builtin_namespace = {
     # Python builtins
@@ -304,6 +319,10 @@ builtin_namespace = {
     'rx': Gate('rx', num_parameters=1),
     'ry': Gate('ry', num_parameters=1),
     'rz': Gate('rz', num_parameters=1),
+    # Measurements
+    'mz': Measurement('mz'),
+    'mx': Measurement('mx'),
+    'my': Measurement('my'),
 }
 
 
@@ -415,14 +434,24 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _binary_op(self, lhs, rhs, op):
         op = op.capitalize()
-        if _is_float_type(lhs.type) and _is_float_type(rhs.type):
+        dialect = arith
+        if op == "Pow":
+            dialect = math
+            if _is_float_type(lhs.type):
+                op = f"F{op}"
+            elif _is_integer_like_type(lhs.type):
+                op = f"I{op}"
+            else:
+                return None
+
+        if _is_float_type(rhs.type):
             op += "F"
-        elif _is_integer_like_type(lhs.type) and _is_integer_like_type(rhs.type):
+        elif _is_integer_like_type(rhs.type):
             op += "I"
         else:
             return None
 
-        op = getattr(arith, f"{op}Op")
+        op = getattr(dialect, f"{op}Op")
         return op(lhs, rhs).result
 
     def _cmp_op(self, lhs, rhs, predicate):
@@ -441,6 +470,9 @@ class CodeGenerator(ast.NodeVisitor):
             return cc.LoadOp(value).result
         return value
 
+    def _is_quantum_type(self, _type):
+        return quake.RefType.isinstance(_type) or quake.VeqType.isinstance(_type)
+
     def _materialize_value(self, value, loc):
         if isinstance(value, List):
             return self._materialize_list(value, loc)
@@ -449,8 +481,11 @@ class CodeGenerator(ast.NodeVisitor):
         return value
 
     def _materialize_list(self, values, loc):
-        values = [self._materialize_value(v, loc) for v in values]
         # At this point, we know that all the values have the same type.
+        values = [self._materialize_value(v, loc) for v in values]
+        if self._is_quantum_type(values[0].type):
+            veq_type = quake.VeqType.get(self.ctx, len(values))
+            return quake.ConcatOp(veq_type, values, loc=loc).result
         array_type = cc.ArrayType.get(self.ctx, values[0].type, len(values))
         array_value = cc.UndefOp(array_type, loc=loc)
         for i, value in enumerate(values):
@@ -655,7 +690,7 @@ class CodeGenerator(ast.NodeVisitor):
         left = self._load_if_pointer(self.visit(node.left))
         right = self._load_if_pointer(self.visit(node.right))
 
-        if isinstance(node.op, (ast.Add, ast.Sub)):
+        if isinstance(node.op, (ast.Add, ast.Sub, ast.Mult)):
             right = self.type_converter.coerce_value_type(left.type, right)
             left = self.type_converter.coerce_value_type(right.type, left)
 
@@ -665,13 +700,22 @@ class CodeGenerator(ast.NodeVisitor):
                 result = self._binary_op(left, right, op="add")
             case ast.BitAnd():
                 result = self._binary_op(left, right, op="and")
+            case ast.Mult():
+                result = self._binary_op(left, right, op="mul")
+            case ast.Pow():
+                result = self._binary_op(left, right, op="pow") 
             case ast.Sub():
                 result = self._binary_op(left, right, op="sub")
             case _:
-                self.diagnostic.emit_error(
-                    node.lineno, node.col_offset,
-                    f"Unsupported operator {ast.unparse(node)} {node.op}"
-                )
+                diagnostic = Diagnostic(
+                    DiagnosticSeverity.ERROR,
+                    f"Unsupported binary operator."
+                ).add_span(DiagnosticSpan.from_ast_node(
+                    node,
+                    file=self.diagnostic.filename,
+                    is_primary=True,
+                ))
+                self.diagnostic.emit(diagnostic)
 
         if result:
             return result
@@ -720,6 +764,10 @@ class CodeGenerator(ast.NodeVisitor):
             parameters = args[0:fn.num_parameters]
             fn._apply(parameters, [], targets, is_adjoint=is_adjoint, loc=loc)
             return None
+
+        if isinstance(fn, Measurement):
+            measure_result = fn._mlir_materialize(args, loc)
+            return measure_result
 
         self.diagnostic.emit_error(
             getattr(node, "lineno", 0),
@@ -788,6 +836,11 @@ class CodeGenerator(ast.NodeVisitor):
             step = iter.step if iter.step else arith.ConstantOp(int64_ty, 1).result
             extractFunctor = lambda idx: [idx]
         else:
+            is_enumerate = False
+            if isinstance(iter, Enumerate):
+                is_enumerate = True
+                iter = iter.iterable
+
             iter = self._materialize_value(iter, self._create_location(node.iter))
             # FIXME: This is a hack. We need array to be in a buffer to be able to extract elements.
             iter = self._bufferize_array(iter, self._create_location(node.iter))
@@ -797,11 +850,18 @@ class CodeGenerator(ast.NodeVisitor):
                 if quake.VeqType.isinstance(iter.type):
                     size = quake.VeqType.getSize(iter.type)
                     if quake.VeqType.hasSpecifiedSize(iter.type):
-                        size = arith.ConstantOp(IntegerType.get_signless(64, self.ctx), size).result
+                        size = arith.ConstantOp(int64_ty, size).result
                     else:
-                        size = quake.VeqSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
+                        size = quake.VeqSizeOp(int64_ty, iter).result
 
-                    extractFunctor = lambda idx: [quake.ExtractRefOp(quake.RefType.get(self.ctx), iter, -1, index=idx).result]
+                    def functor(idx):
+                        qref = quake.ExtractRefOp(quake.RefType.get(self.ctx), iter, -1, index=idx).result
+                        if is_enumerate:
+                            return [idx, qref]
+                        else:
+                            return [qref]
+
+                    extractFunctor = functor
                 elif cc.PointerType.isinstance(iter.type):
                     array_type = cc.PointerType.getElementType(iter.type)
                     element_type = cc.ArrayType.getElementType(array_type)
@@ -812,7 +872,10 @@ class CodeGenerator(ast.NodeVisitor):
                             cc.PointerType.get(self.ctx, element_type), iter,
                             [idx], DenseI32ArrayAttr.get([kDynamicPtrIndex])
                         ).result
-                        return [cc.LoadOp(address).result]
+                        if is_enumerate:
+                            return [idx, cc.LoadOp(address).result]
+                        else:
+                            return [cc.LoadOp(address).result]
 
                     extractFunctor = functor
                 elif cc.StdvecType.isinstance(iter.type):
@@ -828,7 +891,10 @@ class CodeGenerator(ast.NodeVisitor):
                             elePtrTy, vecPtr, [idx],
                             DenseI32ArrayAttr.get([kDynamicPtrIndex],
                                                     context=self.ctx)).result
-                        return [cc.LoadOp(eleAddr).result]
+                        if is_enumerate:
+                            return [idx, cc.LoadOp(eleAddr).result]
+                        else:
+                            return [cc.LoadOp(eleAddr).result]
 
                     extractFunctor = functor
                 else:
@@ -853,7 +919,6 @@ class CodeGenerator(ast.NodeVisitor):
         with InsertionPoint(bodyBlock):
             values = extractFunctor(bodyBlock.arguments[0])
             for target, value in zip(targets, values):
-                print(target)
                 if target.ir_slot is None:
                     target.ir_type = value.type
                     target.ir_slot = self._cc_alloca(value.type, self._create_location(node.target))
@@ -882,7 +947,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.local_symbols.pop_scope()
 
     def visit_FunctionDef(self, node):
-        print(ast.dump(node, indent=4))
+        #print(ast.dump(node, indent=4))
 
         # Process arguments
         # TODO: This attribute is required by users of the code generator.
@@ -999,6 +1064,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert len(node.body) == 1
         assert isinstance(node.body[0], ast.FunctionDef)
         self.visit(node.body[0])
+        print(self.module)
 
     def visit_Name(self, node):
         # The ast.Name node has a context that is either `load` or `store`.
@@ -1015,7 +1081,7 @@ class CodeGenerator(ast.NodeVisitor):
         if symbol:
             loc = self._create_location(node)
             # TODO: Rethink this, it makes handling of arrays a bit awkward.
-            if cc.ArrayType.isinstance(symbol.ir_type):
+            if self._is_quantum_type(symbol.ir_type) or cc.ArrayType.isinstance(symbol.ir_type):
                 return symbol.ir_slot
             return self._cc_load(symbol.ir_slot, loc=loc)
 
