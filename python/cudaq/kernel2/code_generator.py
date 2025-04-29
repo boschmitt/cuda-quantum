@@ -7,10 +7,9 @@
 # ============================================================================ #
 
 import ast
-from collections.abc import Iterable
 from enum import IntEnum
-import inspect
-from textwrap import dedent
+from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 from cudaq.mlir.ir import (
     Context,
@@ -136,6 +135,7 @@ def _arith_cmpf_predicate_attr(predicate):
         case _:
             return None
 
+#-------------------------------------------------------------------------------
 
 class Symbol:
     __slots__ = ('name', 'def_node', 'ir_type', 'ir_slot')
@@ -374,7 +374,7 @@ builtin_namespace = {
     # Python builtins
     'range': Range,
     'enumerate': Enumerate,
-    # CUDA-Q builtins    
+    # CUDA-Q builtins
     'cudaq.qvector': qvector,
     'cudaq.qubit': qubit,
     # One-target gates
@@ -397,7 +397,6 @@ builtin_namespace = {
     'my': Measurement('my'),
 }
 
-
 #-------------------------------------------------------------------------------
 # Visitor
 #-------------------------------------------------------------------------------
@@ -407,7 +406,7 @@ class CodeGenerator(ast.NodeVisitor):
     unsupported_cmpop = {ast.Is, ast.IsNot, ast.In, ast.NotIn}
 
     # TODO: There are some outside code that depends on the MLIR context attribute
-    #       being named `ctx`. We should not have that. 
+    #       being named `ctx`. We should not have that.
     def __init__(self, capturedDataStorage: CapturedDataStorage, **kwargs):
 
         filename, line_number = kwargs.get('locationOffset', ('', 0))
@@ -489,13 +488,14 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _cc_alloca(self, type_, loc):
         return cc.AllocaOp(cc.PointerType.get(self.ctx, type_), TypeAttr.get(type_), loc=loc).result
+
     def _cc_load(self, memory, loc):
         return cc.LoadOp(memory, loc=loc).result
 
     #---------------------------------------------------------------------------
     # Helpers
     #---------------------------------------------------------------------------
-    
+
     def _create_location(self, node):
         return Location.file(
             self.diagnostic.filename,
@@ -622,15 +622,6 @@ class CodeGenerator(ast.NodeVisitor):
 
     #---------------------------------------------------------------------------
 
-    def visit_AnnAssign(self, node):
-        target = self.visit(node.target)
-        type_ = self.visit(node.annotation)
-        value = self.visit(node.value)
-        
-        print(target)
-        print(type_)
-        print(value)
-
     def visit_Assign(self, node):
         # TODO: Make sure we are not assigning a nonlocal or global.
         loc = self._create_location(node)
@@ -681,7 +672,7 @@ class CodeGenerator(ast.NodeVisitor):
             if cc.PointerType.isinstance(value.type):
                 value = cc.LoadOp(value).result
 
-            # We are seeing the identifier for the first time. 
+            # We are seeing the identifier for the first time.
             target.def_node = node
             target.ir_type = value.type
 
@@ -696,8 +687,8 @@ class CodeGenerator(ast.NodeVisitor):
             self.value_to_node.insert(memory,  target)
 
         elif quake.RefType.isinstance(target.ir_type):
-            # Quantum types are not SSA values in the IR, they are memory and 
-            # we don't have an operation capable of adding an extra level of 
+            # Quantum types are not SSA values in the IR, they are memory and
+            # we don't have an operation capable of adding an extra level of
             # indirection here.
             self.diagnostic.emit_error(
                 node.lineno, node.col_offset,
@@ -819,7 +810,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         # return obj
 
-    def visit_BinOp(self, node) -> IRValue:
+    def visit_BinOp(self, node):
         left = self._load_if_pointer(self.visit(node.left))
         right = self._load_if_pointer(self.visit(node.right))
 
@@ -836,7 +827,7 @@ class CodeGenerator(ast.NodeVisitor):
             case ast.Mult():
                 result = self._binary_op(left, right, op="mul")
             case ast.Pow():
-                result = self._binary_op(left, right, op="pow") 
+                result = self._binary_op(left, right, op="pow")
             case ast.Sub():
                 result = self._binary_op(left, right, op="sub")
             case _:
@@ -859,12 +850,12 @@ class CodeGenerator(ast.NodeVisitor):
         )
 
     def visit_Break(self, node):
-        # TODO: Handle edge cases? This statement only make sense with an 
+        # TODO: Handle edge cases? This statement only make sense with an
         # ancestor scope is a loop, `for` or `while`
         cc.UnwindBreakOp([], loc=self._create_location(node))
 
     def visit_Continue(self, node):
-        # TODO: Handle edge cases? This statement only make sense with an 
+        # TODO: Handle edge cases? This statement only make sense with an
         # ancestor scope is a loop, `for` or `while`
         cc.UnwindContinueOp([], loc=self._create_location(node))
 
@@ -880,7 +871,7 @@ class CodeGenerator(ast.NodeVisitor):
             elif node.func.attr == 'ctrl':
                 is_control = True
                 func = node.func.value
-                
+
         fn = self.visit(func)
         args = [self.visit(arg) for arg in node.args]
         loc = self._create_location(node)
@@ -908,7 +899,7 @@ class CodeGenerator(ast.NodeVisitor):
             f"Unsupported call {ast.unparse(node)}",
         )
 
-    def visit_Compare(self, node) -> IRValue:
+    def visit_Compare(self, node):
         # TODO: For now, allow a single comparison only.
         if len(node.comparators) != 1 or len(node.ops) != 1:
             self.diagnostic.emit_error(
@@ -932,7 +923,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         return self._cmp_op(left, right, cmp_op)
 
-    def visit_Constant(self, node) -> IRValue:
+    def visit_Constant(self, node):
         loc = self._create_location(node)
         ty = self.type_converter.convert_type(type(node.value))
         return arith.ConstantOp(ty, node.value, loc=loc).result
@@ -1018,15 +1009,10 @@ class CodeGenerator(ast.NodeVisitor):
 
             cc.ContinueOp(bodyBlock.arguments)
 
-        stepBlock = Block.create_at_start(loop.stepRegion, [int64_ty])
-        with InsertionPoint(stepBlock):
-            incr = arith.AddIOp(stepBlock.arguments[0], step).result
-            cc.ContinueOp([incr])
-
         self.local_symbols.pop_scope()
 
     def visit_FunctionDef(self, node):
-        #print(ast.dump(node, indent=4))
+        print(ast.dump(node, indent=4))
 
         # Process arguments
         # TODO: This attribute is required by users of the code generator.
