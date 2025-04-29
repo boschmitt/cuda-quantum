@@ -725,6 +725,68 @@ class CodeGenerator(ast.NodeVisitor):
 
         cc.StoreOp(value, target.ir_slot, loc=loc)
 
+    def visit_AugAssign(self, node):
+        # Unlike the assignment, we don't need to check for the target being a
+        # name, we know it has to be a name by the grammar.
+        target = self.visit(node.target)
+        value = self.visit(node.value)
+
+        if not isinstance(target, Symbol) or not target.ir_slot:
+            self.diagnostic.emit(Diagnostic(
+                DiagnosticSeverity.ERROR,
+                f"Cannot augment assign to a name that is not defined",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node.target,
+                file=self.diagnostic.filename,
+                is_primary=True,
+                label=f"Undefined name '{target.name}'"
+            )))
+
+        if target.ir_type != value.type:
+            self.diagnostic.emit(Diagnostic(
+                DiagnosticSeverity.ERROR,
+                f"Cannot assign a value of type {value.type} to a name that previously contained a value of type {target.ir_type}",
+            ).add_span(DiagnosticSpan.from_ast_node(
+                node,
+                file=self.diagnostic.filename,
+                is_primary=True,
+            )))
+
+        result = None
+        loc = self._create_location(node)
+        target_value = self._cc_load(target.ir_slot, loc)
+        match node.op:
+            case ast.Add():
+                result = self._binary_op(target_value, value, op="add")
+            case ast.Mult():
+                result = self._binary_op(target_value, value, op="mul")
+            case ast.Sub():
+                result = self._binary_op(target_value, value, op="sub")
+            case _:
+                diagnostic = Diagnostic(
+                    DiagnosticSeverity.ERROR,
+                    f"Unsupported augmented assignment."
+                ).add_span(DiagnosticSpan.from_ast_node(
+                    node.op,
+                    file=self.diagnostic.filename,
+                    is_primary=True,
+                ))
+                self.diagnostic.emit(diagnostic)
+
+        if result:
+            cc.StoreOp(result, target.ir_slot, loc=loc)
+            return
+
+        diagnostic = Diagnostic(
+            DiagnosticSeverity.ERROR,
+            f"Unsupported augmented assignment."
+        ).add_span(DiagnosticSpan.from_ast_node(
+            node,
+            file=self.diagnostic.filename,
+            is_primary=True,
+        ))
+        self.diagnostic.emit(diagnostic)
+
     def visit_Attribute(self, node):
         # Avoid recursing in the cases where we have "foo.bar.zaz"
         new_node = node.value
