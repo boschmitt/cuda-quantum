@@ -149,7 +149,30 @@ class Symbol:
     def __repr__(self):
         return f"Symbol(name={self.name}, def_node={self.def_node}, ir_type={self.ir_type}, ir_slot={self.ir_slot})"
 
-class Range:
+#-------------------------------------------------------------------------------
+# Iterable helpers
+#-------------------------------------------------------------------------------
+
+class Iterable(ABC):
+    """Base class for all iterable types"""
+
+    @abstractmethod
+    def get_loop_params(self, loc):
+        """
+        Returns loop parameters (start, size, step)
+        loc: Source location
+        """
+        pass
+
+    @abstractmethod
+    def extract_element(self, index, loc):
+        """
+        Extract element(s) at the given index
+        Returns a list of values (for unpacking/enumerate support)
+        """
+        pass
+
+class Range(Iterable):
     __slots__ = ('start', 'step', 'stop')
 
     def __init__(self, *args):
@@ -168,84 +191,133 @@ class Range:
         else:
             raise ValueError("Range requires 1 to 3 integer arguments")
 
-    def _mlir_materialize(self, loc):
-        with loc.context, loc:
-            int64_ty = IntegerType.get_signless(64)
-            zero = arith.ConstantOp(int64_ty, IntegerAttr.get(int64_ty, 0))
-            one = arith.ConstantOp(int64_ty, IntegerAttr.get(int64_ty, 1))
+    def get_loop_params(self, loc):
+        int64_ty = IntegerType.get_signless(64, loc.context)
+        start = self.start if self.start else arith.ConstantOp(int64_ty, 0, loc=loc).result
+        size = self.stop
+        step = self.step if self.step else arith.ConstantOp(int64_ty, 1, loc=loc).result
+        return start, size, step
 
-            start = self.start if self.start else zero
-            step = self.step if self.step else one
+    def extract_element(self, index, loc):
+        return [index]
 
-            # The total number of elements in the iterable
-            size = math.AbsIOp(arith.SubIOp(self.stop, start).result).result
-            if self.step:
-                size = arith.DivSIOp(size, math.AbsIOp(self.step).result).result
-
-            # Allocate an array of i64 of the total size
-            array_ty = cc.ArrayType.get(loc.context, int64_ty)
-            memory = cc.AllocaOp(cc.PointerType.get(loc.context, array_ty),
-                                TypeAttr.get(int64_ty),
-                                seqSize=size).result
-
-            # Now, we populate the array with the values. The idea is to build an
-            # array like: [start + 0*step, start + 1*step, start + 2*step, start + 3*step, ...]
-            loop = cc.LoopOp([int64_ty], [one], BoolAttr.get(False))
-
-            whileBlock = Block.create_at_start(loop.whileRegion, [int64_ty])
-            with InsertionPoint(whileBlock):
-                test = self._cmp_op(whileBlock.arguments[0], size, ast.Lt)
-                cc.ConditionOp(test, whileBlock.arguments)
-
-            bodyBlock = Block.create_at_start(loop.bodyRegion, [int64_ty])
-            with InsertionPoint(bodyBlock):
-                tmp = arith.MulIOp(bodyBlock.arguments[0], step).result
-                value = arith.AddIOp(start, tmp).result
-                element_addr = cc.ComputePtrOp(
-                    cc.PointerType.get(loc.context, int64_ty), memory,
-                    [bodyBlock.arguments[0]],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                        context=loc.context))
-
-                # Store the value in the array
-                cc.StoreOp(value, element_addr)
-
-            stepBlock = Block.create_at_start(loop.stepRegion, [int64_ty])
-            with InsertionPoint(stepBlock):
-                cc.ContinueOp([arith.AddIOp(stepBlock.arguments[0], one).result])
-
-    # Add this method this class is a Iterable
     def __iter__(self):
-        pass
+        pass  # Keep existing iterator method
 
     def __repr__(self):
         return f"Range(start={self.start}, stop={self.stop}, step={self.step})"
 
-class Enumerate:
+class Enumerate(Iterable):
     __slots__ = ('iterable', 'start')
 
     def __init__(self, iterable, start=None):
         self.iterable = iterable
         self.start = start
 
+    def get_loop_params(self, loc):
+        # Delegate to the wrapped iterable
+        return self.iterable.get_loop_params(loc)
+
+    def extract_element(self, index, loc):
+        # Get the base element and add the index
+        base_values = self.iterable.extract_element(index, loc)
+        return [index] + base_values
+
     def __iter__(self):
-        pass
+        pass  # Keep existing iterator method
 
     def __repr__(self):
         return f"Enumerate(iterable={self.iterable}, start={self.start})"
 
-class List:
-    __slots__ = ('elements', 'type')
+class VeqIterable(Iterable):
+    """Iterable adapter for quantum vector values"""
 
-    def __init__(self, elements):
-        self.elements = elements
-        self.type = f"List[{elements[0].type}]"
+    __slots__ = ('value',)
 
-    def __iter__(self):
-        return iter(self.elements)
+    def __init__(self, value):
+        self.value = value
 
-    def __repr__(self):
-        return f"List(elements={self.elements})"
+    def get_loop_params(self, loc):
+        int64_ty = IntegerType.get_signless(64, loc.context)
+        start = arith.ConstantOp(int64_ty, 0, loc=loc).result
+        step = arith.ConstantOp(int64_ty, 1, loc=loc).result
+
+        size = quake.VeqType.getSize(self.value.type)
+        if quake.VeqType.hasSpecifiedSize(self.value.type):
+            size = arith.ConstantOp(int64_ty, size, loc=loc).result
+        else:
+            size = quake.VeqSizeOp(int64_ty, self.value, loc=loc).result
+
+        return start, size, step
+
+    def extract_element(self, index, loc):
+        return [quake.ExtractRefOp(
+            quake.RefType.get(loc.context),
+            self.value,
+            -1,
+            index=index,
+            loc=loc
+        ).result]
+
+class ArrayIterable(Iterable):
+    """Iterable adapter for array values"""
+
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def get_loop_params(self, loc):
+        int64_ty = IntegerType.get_signless(64, loc.context)
+        start = arith.ConstantOp(int64_ty, 0, loc=loc).result
+        step = arith.ConstantOp(int64_ty, 1, loc=loc).result
+
+        array_type = cc.PointerType.getElementType(self.value.type)
+        size = arith.ConstantOp(int64_ty, cc.ArrayType.getSize(array_type), loc=loc).result
+
+        return start, size, step
+
+    def extract_element(self, index, loc):
+        array_type = cc.PointerType.getElementType(self.value.type)
+        element_type = cc.ArrayType.getElementType(array_type)
+        address = cc.ComputePtrOp(
+            cc.PointerType.get(loc.context, element_type),
+            self.value,
+            [index],
+            DenseI32ArrayAttr.get([kDynamicPtrIndex], context=loc.context),
+            loc=loc
+        ).result
+        return [cc.LoadOp(address, loc=loc).result]
+
+class StdvecIterable(Iterable):
+    """Iterable adapter for standard vector values"""
+
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def get_loop_params(self, loc):
+        int64_ty = IntegerType.get_signless(64, loc.context)
+        start = arith.ConstantOp(int64_ty, 0, loc=loc).result
+        step = arith.ConstantOp(int64_ty, 1, loc=loc).result
+        size = cc.StdvecSizeOp(int64_ty, self.value, loc=loc).result
+        return start, size, step
+
+    def extract_element(self, index, loc):
+        element_type = cc.StdvecType.getElementType(self.value.type)
+        ptr_type = cc.PointerType.get(loc.context, element_type)
+        array_type = cc.ArrayType.get(loc.context, element_type)
+        ptr_array_type = cc.PointerType.get(loc.context, array_type)
+        vec_ptr = cc.StdvecDataOp(ptr_array_type, self.value, loc=loc).result
+        elem_addr = cc.ComputePtrOp(
+            ptr_type,
+            vec_ptr,
+            [index],
+            DenseI32ArrayAttr.get([kDynamicPtrIndex], context=loc.context),
+            loc=loc
+        ).result
+        return [cc.LoadOp(elem_addr, loc=loc).result]
 
 #-------------------------------------------------------------------------------
 # Builtin namespace
@@ -473,62 +545,62 @@ class CodeGenerator(ast.NodeVisitor):
     def _is_quantum_type(self, _type):
         return quake.RefType.isinstance(_type) or quake.VeqType.isinstance(_type)
 
-    def _materialize_value(self, value, loc):
-        if isinstance(value, List):
-            return self._materialize_list(value, loc)
-        elif isinstance(value, tuple):
-            return self._materialize_tuple(value, loc)
-        return value
-
-    def _materialize_list(self, values, loc):
-        # At this point, we know that all the values have the same type.
-        values = [self._materialize_value(v, loc) for v in values]
-        if self._is_quantum_type(values[0].type):
-            veq_type = quake.VeqType.get(self.ctx, len(values))
-            return quake.ConcatOp(veq_type, values, loc=loc).result
-        array_type = cc.ArrayType.get(self.ctx, values[0].type, len(values))
-        array_value = cc.UndefOp(array_type, loc=loc)
-        for i, value in enumerate(values):
-            array_value = cc.InsertValueOp(array_type, array_value, value, DenseI64ArrayAttr.get([i]), loc=loc)
-
-        return array_value.result
-        # buffer = cc.AllocaOp(cc.PointerType.get(self.ctx, array_type), TypeAttr.get(array_type), loc=loc).result
-        # cc.StoreOp(array_value, buffer, loc=loc)
-        # return buffer
-
-        # int64_ty = IntegerType.get_signless(64, self.ctx)
-        # arrSize = arith.ConstantOp(int64_ty, len(values)).result
-        # arrTy = cc.ArrayType.get(self.ctx, first_type)
-        # alloca = cc.AllocaOp(cc.PointerType.get(self.ctx, arrTy),
-        #                      TypeAttr.get(first_type),
-        #                      seqSize=arrSize).result
-
-        # for i, v in enumerate(values):
-        #     eleAddr = cc.ComputePtrOp(
-        #         cc.PointerType.get(self.ctx, first_type), alloca,
-        #         [arith.ConstantOp(int64_ty, i).result],
-        #         DenseI32ArrayAttr.get([kDynamicPtrIndex],
-        #                               context=self.ctx)).result
-        #     cc.StoreOp(v, eleAddr)
-
-        # return cc.StdvecInitOp(cc.StdvecType.get(self.ctx, first_type), alloca,
-        #                        arrSize).result
-
-    def _materialize_tuple(self, values, loc):
-        # Create a tuple type
-        tuple_type = cc.StructType.get(self.ctx, [t.type for t in values])
-        # Create a tuple value
-        tuple_value = cc.UndefOp(tuple_type, loc=loc)
-        for i, value in enumerate(values):
-            tuple_value = cc.InsertValueOp(tuple_type, tuple_value, value, DenseI64ArrayAttr.get([i]), loc=loc)
-        return tuple_value.result
-
     def _bufferize_array(self, value, loc):
         if cc.ArrayType.isinstance(value.type):
             buffer = cc.AllocaOp(cc.PointerType.get(self.ctx, value.type), TypeAttr.get(value.type), loc=loc).result
             cc.StoreOp(value, buffer, loc=loc)
             return buffer
         return value
+
+    def _make_iterable(self, value, node):
+        """
+        Convert a value to an Iterable if possible
+        Returns None and emits diagnostics if value cannot be made iterable
+
+        Args:
+            value: The value to convert to an Iterable
+            node: The AST node for diagnostics
+
+        Returns:
+            An Iterable object or None if conversion failed
+        """
+        if isinstance(value, Iterable):
+            # Check if Enumerate wraps a non-iterable
+            if isinstance(value, Enumerate):
+                value.iterable = self._make_iterable(value.iterable, node)
+                if not value.iterable:
+                    self.diagnostic.emit(Diagnostic(
+                        DiagnosticSeverity.ERROR,
+                        "enumerate() argument must be an iterable"
+                    ).add_span(DiagnosticSpan.from_ast_node(
+                        node,
+                        file=self.diagnostic.filename,
+                        is_primary=True
+                    )))
+            return value
+
+        if isinstance(value, IRValue):
+            value = self._bufferize_array(value, self._create_location(node))
+            # Create appropriate adapter based on IR type
+            if quake.VeqType.isinstance(value.type):
+                return VeqIterable(value)
+            elif cc.PointerType.isinstance(value.type):
+                array_type = cc.PointerType.getElementType(value.type)
+                if cc.ArrayType.isinstance(array_type):
+                    return ArrayIterable(value)
+            elif cc.StdvecType.isinstance(value.type):
+                return StdvecIterable(value)
+
+        # Not an iterable
+        self.diagnostic.emit(Diagnostic(
+            DiagnosticSeverity.ERROR,
+            f"'{type(value).__name__}' object is not iterable"
+        ).add_span(DiagnosticSpan.from_ast_node(
+            node,
+            file=self.diagnostic.filename,
+            is_primary=True
+        )))
+        return None
 
     #---------------------------------------------------------------------------
     # Generic visiting
@@ -594,7 +666,6 @@ class CodeGenerator(ast.NodeVisitor):
         value = self.visit(node.value)
 
         # Make sure we are dealing with an IRValue
-        value = self._materialize_value(value, self._create_location(node.value))
         if not isinstance(value, IRValue):
             diagnostic = Diagnostic(
                 DiagnosticSeverity.ERROR,
@@ -815,128 +886,74 @@ class CodeGenerator(ast.NodeVisitor):
         return self.visit(node.value)
 
     def visit_For(self, node):
-        # We don't support all sort of iterables, for now we only support
-        # iterables that are vector-like, i.e. have a specified size or can
-        # be queried for its size.
-
-        iter = self.visit(node.iter)
+        iter_value = self.visit(node.iter)
         self.local_symbols.push_scope()
         targets = self.visit(node.target)
         if isinstance(targets, Symbol):
             targets = [targets]
 
-        int64_ty = IntegerType.get_signless(64, self.ctx)
-        start = None
-        step = None
-        size = None
-        extractFunctor = None
-        if isinstance(iter, Range):
-            start = iter.start if iter.start else arith.ConstantOp(int64_ty, 0).result
-            size = iter.stop
-            step = iter.step if iter.step else arith.ConstantOp(int64_ty, 1).result
-            extractFunctor = lambda idx: [idx]
-        else:
-            is_enumerate = False
-            if isinstance(iter, Enumerate):
-                is_enumerate = True
-                iter = iter.iterable
+        loc = self._create_location(node)
+        iterable = self._make_iterable(iter_value, node.iter)
+        start, size, step = iterable.get_loop_params(loc)
 
-            iter = self._materialize_value(iter, self._create_location(node.iter))
-            # FIXME: This is a hack. We need array to be in a buffer to be able to extract elements.
-            iter = self._bufferize_array(iter, self._create_location(node.iter))
-            if isinstance(iter, IRValue):
-                start = arith.ConstantOp(int64_ty, 0).result
-                step = arith.ConstantOp(int64_ty, 1).result
-                if quake.VeqType.isinstance(iter.type):
-                    size = quake.VeqType.getSize(iter.type)
-                    if quake.VeqType.hasSpecifiedSize(iter.type):
-                        size = arith.ConstantOp(int64_ty, size).result
-                    else:
-                        size = quake.VeqSizeOp(int64_ty, iter).result
+        # Materialize the loop
+        loop = cc.LoopOp([start.type], [start], BoolAttr.get(False))
 
-                    def functor(idx):
-                        qref = quake.ExtractRefOp(quake.RefType.get(self.ctx), iter, -1, index=idx).result
-                        if is_enumerate:
-                            return [idx, qref]
-                        else:
-                            return [qref]
-
-                    extractFunctor = functor
-                elif cc.PointerType.isinstance(iter.type):
-                    array_type = cc.PointerType.getElementType(iter.type)
-                    element_type = cc.ArrayType.getElementType(array_type)
-                    size = arith.ConstantOp(IntegerType.get_signless(64, self.ctx), cc.ArrayType.getSize(array_type)).result
-
-                    def functor(idx):
-                        address = cc.ComputePtrOp(
-                            cc.PointerType.get(self.ctx, element_type), iter,
-                            [idx], DenseI32ArrayAttr.get([kDynamicPtrIndex])
-                        ).result
-                        if is_enumerate:
-                            return [idx, cc.LoadOp(address).result]
-                        else:
-                            return [cc.LoadOp(address).result]
-
-                    extractFunctor = functor
-                elif cc.StdvecType.isinstance(iter.type):
-                    iterEleTy = cc.StdvecType.getElementType(iter.type)
-                    size = cc.StdvecSizeOp(IntegerType.get_signless(64, self.ctx), iter).result
-
-                    def functor(idx):
-                        elePtrTy = cc.PointerType.get(self.ctx, iterEleTy)
-                        arrTy = cc.ArrayType.get(self.ctx, iterEleTy)
-                        ptrArrTy = cc.PointerType.get(self.ctx, arrTy)
-                        vecPtr = cc.StdvecDataOp(ptrArrTy, iter).result
-                        eleAddr = cc.ComputePtrOp(
-                            elePtrTy, vecPtr, [idx],
-                            DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                    context=self.ctx)).result
-                        if is_enumerate:
-                            return [idx, cc.LoadOp(eleAddr).result]
-                        else:
-                            return [cc.LoadOp(eleAddr).result]
-
-                    extractFunctor = functor
-                else:
-                    diagnostic = Diagnostic(
-                        DiagnosticSeverity.ERROR,
-                        f"Unsupported iterable type {iter.type}"
-                    ).add_span(DiagnosticSpan.from_ast_node(
-                        node.iter,
-                        file=self.diagnostic.filename,
-                        is_primary=True,
-                    ))
-                    self.diagnostic.emit(diagnostic)
-
-        loop = cc.LoopOp([int64_ty], [start], BoolAttr.get(False))
-
-        whileBlock = Block.create_at_start(loop.whileRegion, [int64_ty])
+        # Create while condition block
+        whileBlock = Block.create_at_start(loop.whileRegion, [start.type])
         with InsertionPoint(whileBlock):
             test = self._cmp_op(whileBlock.arguments[0], size, ast.Lt)
             cc.ConditionOp(test, whileBlock.arguments)
 
-        bodyBlock = Block.create_at_start(loop.bodyRegion, [int64_ty])
+        # Create step block
+        stepBlock = Block.create_at_start(loop.stepRegion, [start.type])
+        with InsertionPoint(stepBlock):
+            incr = arith.AddIOp(stepBlock.arguments[0], step).result
+            cc.ContinueOp([incr])
+
+        # Create and populate the body block
+        bodyBlock = Block.create_at_start(loop.bodyRegion, [start.type])
         with InsertionPoint(bodyBlock):
-            values = extractFunctor(bodyBlock.arguments[0])
+            # Extract elements for this iteration
+            values = iterable.extract_element(bodyBlock.arguments[0], loc)
+
+            # Validate target/value count
+            if len(targets) != len(values):
+                self.diagnostic.emit(Diagnostic(
+                    DiagnosticSeverity.ERROR,
+                    f"Cannot unpack {len(values)} values into {len(targets)} targets"
+                ).add_span(DiagnosticSpan.from_ast_node(
+                    node.target,
+                    file=self.diagnostic.filename,
+                    is_primary=True,
+                    label=f"Expected {len(values)} targets, got {len(targets)}"
+                )))
+
+            # Assign values to targets
             for target, value in zip(targets, values):
                 if target.ir_slot is None:
+                    # Initialize new target
                     target.ir_type = value.type
-                    target.ir_slot = self._cc_alloca(value.type, self._create_location(node.target))
-                    cc.StoreOp(value, target.ir_slot, loc=self._create_location(node.target))
-                    self.local_symbols.insert(target, target)
+                    target.ir_slot = self._cc_alloca(value.type, loc)
+                    cc.StoreOp(value, target.ir_slot, loc=loc)
+                    self.local_symbols.insert(target.name, target)
                 else:
+                    # Check type compatibility
                     if target.ir_type != value.type:
-                        diagnostic = Diagnostic(
+                        self.diagnostic.emit(Diagnostic(
                             DiagnosticSeverity.ERROR,
                             f"Cannot assign a value of type {value.type} to a name that previously contained a value of type {target.ir_type}"
                         ).add_span(DiagnosticSpan.from_ast_node(
                             node.target,
                             file=self.diagnostic.filename,
-                        ))
-                        self.diagnostic.emit(diagnostic)
-                    cc.StoreOp(value, target.ir_slot, loc=self._create_location(node.target))
+                            is_primary=True
+                        )))
+                    cc.StoreOp(value, target.ir_slot, loc=loc)
+
+            # Process the loop body
             for stmt in node.body:
                 self.visit(stmt)
+
             cc.ContinueOp(bodyBlock.arguments)
 
         stepBlock = Block.create_at_start(loop.stepRegion, [int64_ty])
@@ -1035,6 +1052,7 @@ class CodeGenerator(ast.NodeVisitor):
                 self.local_symbols.pop_scope()
 
     def visit_List(self, node):
+        loc = self._create_location(node)
         values = [self.visit(elt) for elt in node.elts]
 
         # Check if empty list
@@ -1058,7 +1076,15 @@ class CodeGenerator(ast.NodeVisitor):
                 ))
                 self.diagnostic.emit(diagnostic)
 
-        return List(values)
+        if self._is_quantum_type(values[0].type):
+            veq_type = quake.VeqType.get(self.ctx, len(values))
+            return quake.ConcatOp(veq_type, values, loc=loc).result
+        array_type = cc.ArrayType.get(self.ctx, values[0].type, len(values))
+        array_value = cc.UndefOp(array_type, loc=loc)
+        for i, value in enumerate(values):
+            array_value = cc.InsertValueOp(array_type, array_value, value, DenseI64ArrayAttr.get([i]), loc=loc)
+
+        return array_value.result
 
     def visit_Module(self, node):
         assert len(node.body) == 1
@@ -1190,7 +1216,17 @@ class CodeGenerator(ast.NodeVisitor):
         self.diagnostic.emit(diagnostic)
 
     def visit_Tuple(self, node):
-        return tuple(self.visit(elt) for elt in node.elts)
+        values = [self.visit(elt) for elt in node.elts]
+        if type(node.ctx) is ast.Store:
+            return tuple(values)
+
+        # Materialize the tuple
+        loc = self._create_location(node)
+        tuple_type = cc.StructType.get(self.ctx, [t.type for t in values])
+        tuple_value = cc.UndefOp(tuple_type, loc=loc)
+        for i, value in enumerate(values):
+            tuple_value = cc.InsertValueOp(tuple_type, tuple_value, value, DenseI64ArrayAttr.get([i]), loc=loc)
+        return tuple_value.result
 
     def visit_While(self, node):
         loop = cc.LoopOp([], [], BoolAttr.get(False))
