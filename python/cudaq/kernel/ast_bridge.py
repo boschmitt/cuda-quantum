@@ -12,6 +12,7 @@ import textwrap
 import numpy as np
 import os
 import sys
+from abc import ABC, abstractmethod
 from collections import deque
 
 from cudaq.mlir._mlir_libs._quakeDialects import (
@@ -23,7 +24,8 @@ from cudaq.mlir.ir import (BoolAttr, Block, BlockArgument, Context, ComplexType,
                            DenseI64ArrayAttr, DictAttr, F32Type, F64Type,
                            FlatSymbolRefAttr, FloatAttr, FunctionType,
                            InsertionPoint, IntegerAttr, IntegerType, Location,
-                           Module, StringAttr, SymbolTable, TypeAttr, UnitAttr)
+                           Module, StringAttr, SymbolTable, TypeAttr, UnitAttr,
+                           Value as IRValue)
 from cudaq.mlir.passmanager import PassManager
 from .analysis import FindDepKernelsVisitor
 from .captured_data import CapturedDataStorage
@@ -106,6 +108,288 @@ class CompilerError(RuntimeError):
 
     def __init__(self, *args, **kwargs):
         RuntimeError.__init__(self, *args, **kwargs)
+
+
+#-------------------------------------------------------------------------------
+# Iterable helpers
+#-------------------------------------------------------------------------------
+
+
+class Iterable(ABC):
+    """Base class for all iterable types"""
+
+    @abstractmethod
+    def get_loop_params(self, loc):
+        """
+        Returns loop parameters (start, size, step)
+        loc: Source location
+        """
+        pass
+
+    @abstractmethod
+    def extract_element(self, index, loc):
+        """
+        Extract element(s) at the given index
+        Returns a list of values (for unpacking/enumerate support)
+        """
+        pass
+
+
+class Range(Iterable):
+    __slots__ = ('start', 'step', 'stop')
+
+    def __init__(self, *args):
+        self.start = None
+        self.step = None
+        self.stop = None
+        if len(args) == 1:
+            self.stop = args[0]
+        elif len(args) == 2:
+            self.start = args[0]
+            self.stop = args[1]
+        elif len(args) == 3:
+            self.start = args[0]
+            self.stop = args[1]
+            self.step = args[2]
+        else:
+            raise ValueError("Range requires 1 to 3 integer arguments")
+
+    def get_loop_params(self, loc):
+        # Useful helpers
+        i64 = IntegerType.get_signless(64, loc.context)
+        zero = arith.ConstantOp(i64, IntegerAttr.get(i64, 0), loc=loc).result
+        one = arith.ConstantOp(i64, IntegerAttr.get(i64, 1), loc=loc).result
+
+        if self.start is None:
+            self.start = zero
+        if self.step is None:
+            self.step = one
+
+        # Range expects integers
+        if F64Type.isinstance(self.start.type):
+            self.start = arith.FPToSIOp(i64, self.start).result
+
+        if F64Type.isinstance(self.stop.type):
+            self.stop = arith.FPToSIOp(i64, self.stop).result
+
+        if F64Type.isinstance(self.step.type):
+            self.step = arith.FPToSIOp(i64, self.step).result
+
+        # We need to check for a empty range
+        diff = arith.SubIOp(self.stop, self.start, loc=loc).result
+
+        # First condition: step > 0 and diff <= 0
+        step_gt_zero = arith.CmpIOp(IntegerAttr.get(i64, 4),
+                                    self.step,
+                                    zero,
+                                    loc=loc)
+        diff_le_zero = arith.CmpIOp(IntegerAttr.get(i64, 3),
+                                    diff,
+                                    zero,
+                                    loc=loc)
+        first_condition = arith.AndIOp(step_gt_zero, diff_le_zero, loc=loc)
+
+        # Second condition: step < 0 and diff >= 0
+        step_lt_zero = arith.CmpIOp(IntegerAttr.get(i64, 2),
+                                    self.step,
+                                    zero,
+                                    loc=loc)
+        diff_ge_zero = arith.CmpIOp(IntegerAttr.get(i64, 5),
+                                    diff,
+                                    zero,
+                                    loc=loc)
+        second_condition = arith.AndIOp(step_lt_zero, diff_ge_zero, loc=loc)
+
+        is_empty = arith.OrIOp(first_condition, second_condition, loc=loc)
+
+        step = math.AbsIOp(self.step, loc=loc)
+        length = arith.CeilDivSIOp(math.AbsIOp(diff, loc=loc).result,
+                                   step,
+                                   loc=loc).result
+        length = arith.SelectOp(is_empty, zero, length, loc=loc)
+        return zero, length, one
+
+    def extract_element(self, index, loc):
+        element = arith.AddIOp(self.start,
+                               arith.MulIOp(index, self.step, loc=loc),
+                               loc=loc).result
+        return [element]
+
+    def element_type(self, context):
+        return IntegerType.get_signless(64, context)
+
+    def materialize(self, loc):
+        start, size, step = self.get_loop_params(loc)
+
+        i64 = IntegerType.get_signless(64, loc.context)
+        array_type = cc.ArrayType.get(loc.context, i64)
+        array = cc.AllocaOp(cc.PointerType.get(loc.context, array_type),
+                            TypeAttr.get(i64),
+                            seqSize=size).result
+
+        loop = cc.LoopOp([start.type], [start], BoolAttr.get(False))
+
+        # Create while condition block
+        whileBlock = Block.create_at_start(loop.whileRegion, [start.type])
+        with InsertionPoint(whileBlock):
+            pred = IntegerAttr.get(i64, 2)
+            test = arith.CmpIOp(pred, whileBlock.arguments[0], size).result
+            cc.ConditionOp(test, whileBlock.arguments)
+
+        # Create step block
+        stepBlock = Block.create_at_start(loop.stepRegion, [start.type])
+        with InsertionPoint(stepBlock):
+            incr = arith.AddIOp(stepBlock.arguments[0], step).result
+            cc.ContinueOp([incr])
+
+        # Create and populate the body block
+        bodyBlock = Block.create_at_start(loop.bodyRegion, [start.type])
+        with InsertionPoint(bodyBlock):
+            index = bodyBlock.arguments[0]
+            value = self.extract_element(index, loc)[0]
+            array_address = cc.ComputePtrOp(
+                cc.PointerType.get(loc.context, i64), array, [index],
+                DenseI32ArrayAttr.get([kDynamicPtrIndex], context=loc.context))
+            cc.StoreOp(value, array_address)
+            cc.ContinueOp(bodyBlock.arguments)
+
+        loop.attributes['invariant'] = UnitAttr.get(loc.context)
+        return cc.StdvecInitOp(cc.StdvecType.get(loc.context, i64),
+                               array,
+                               length=size).result
+
+    def __repr__(self):
+        return f"Range(start={self.start}, stop={self.stop}, step={self.step})"
+
+
+class VeqIterable(Iterable):
+    """Iterable adapter for quantum vector values"""
+
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def get_loop_params(self, loc):
+        int64_ty = IntegerType.get_signless(64, loc.context)
+        start = arith.ConstantOp(int64_ty, 0, loc=loc).result
+        step = arith.ConstantOp(int64_ty, 1, loc=loc).result
+
+        size = quake.VeqType.getSize(self.value.type)
+        if quake.VeqType.hasSpecifiedSize(self.value.type):
+            size = arith.ConstantOp(int64_ty, size, loc=loc).result
+        else:
+            size = quake.VeqSizeOp(int64_ty, self.value, loc=loc).result
+
+        return start, size, step
+
+    def extract_element(self, index, loc):
+        return [
+            quake.ExtractRefOp(quake.RefType.get(loc.context),
+                               self.value,
+                               -1,
+                               index=index,
+                               loc=loc).result
+        ]
+
+    def element_type(self, context):
+        return quake.RefType.get(context)
+
+    def materialize(self, loc):
+        return self.value
+
+
+class StdvecIterable(Iterable):
+    """Iterable adapter for standard vector values"""
+
+    __slots__ = ('value',)
+
+    def __init__(self, value):
+        self.value = value
+
+    def get_loop_params(self, loc):
+        int64_ty = IntegerType.get_signless(64, loc.context)
+        start = arith.ConstantOp(int64_ty, 0, loc=loc).result
+        step = arith.ConstantOp(int64_ty, 1, loc=loc).result
+        size = cc.StdvecSizeOp(int64_ty, self.value, loc=loc).result
+        return start, size, step
+
+    def extract_element(self, index, loc):
+        element_type = cc.StdvecType.getElementType(self.value.type)
+        ptr_type = cc.PointerType.get(loc.context, element_type)
+        array_type = cc.ArrayType.get(loc.context, element_type)
+        ptr_array_type = cc.PointerType.get(loc.context, array_type)
+        vec_ptr = cc.StdvecDataOp(ptr_array_type, self.value, loc=loc).result
+        elem_addr = cc.ComputePtrOp(ptr_type,
+                                    vec_ptr, [index],
+                                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
+                                                          context=loc.context),
+                                    loc=loc).result
+        return [cc.LoadOp(elem_addr, loc=loc).result]
+
+    def element_type(self, context):
+        return cc.StdvecType.getElementType(self.value.type)
+
+    def materialize(self, loc):
+        return self.value
+
+
+def _make_iterable(value):
+    """
+    Convert a value to an Iterable if possible
+    Returns None and emits diagnostics if value cannot be made iterable
+    Args:
+        value: The value to convert to an Iterable
+        node: The AST node for diagnostics
+    Returns:
+        An Iterable object or None if conversion failed
+    """
+    if isinstance(value, Iterable):
+        return value
+
+    if isinstance(value, IRValue):
+        if quake.VeqType.isinstance(value.type):
+            return VeqIterable(value)
+        elif cc.StdvecType.isinstance(value.type):
+            return StdvecIterable(value)
+
+    return None
+
+
+class Enumerate(Iterable):
+    __slots__ = ('iterable', 'start')
+
+    def __init__(self, iterable, start=None):
+        self.iterable = _make_iterable(iterable)
+        if self.iterable is None:
+            print(iterable)
+            raise CompilerError()
+        self.start = start
+
+    def get_loop_params(self, loc):
+        # Delegate to the wrapped iterable
+        return self.iterable.get_loop_params(loc)
+
+    def extract_element(self, index, loc):
+        # Get the base element and add the index
+        base_values = self.iterable.extract_element(index, loc)
+        if self.start is not None:
+            if F64Type.isinstance(self.start.type):
+                i64 = IntegerType.get_signless(64, loc.context)
+                self.start = arith.FPToSIOp(i64, self.start).result
+            index = arith.AddIOp(index, self.start, loc=loc).result
+        return [index] + base_values
+
+    def element_type(self, context):
+        i64 = IntegerType.get_signless(64, context)
+        element_type = self.iterable.element_type(context)
+        return cc.StructType.get(context, [i64, element_type])
+
+    def __repr__(self):
+        return f"Enumerate(iterable={self.iterable}, start={self.start})"
+
+
+#-------------------------------------------------------------------------------
 
 
 class PyASTBridge(ast.NodeVisitor):
@@ -892,65 +1176,6 @@ class PyASTBridge(ast.NodeVisitor):
                 )
         return
 
-    def __processRangeLoopIterationBounds(self, argumentNodes):
-        """
-        Analyze `range(...)` bounds and return the start, end, 
-        and step values, as well as whether or not this a decrementing range.
-        """
-        iTy = self.getIntegerType(64)
-        zero = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 0))
-        one = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 1))
-        isDecrementing = False
-        if len(argumentNodes) == 3:
-            # Find the step val and we need to
-            # know if its decrementing
-            # can be incrementing or decrementing
-            stepVal = self.popValue()
-            if isinstance(argumentNodes[2], ast.UnaryOp):
-                self.debug_msg(lambda: f'[(Inline) Visit UnaryOp]',
-                               argumentNodes[2])
-                if isinstance(argumentNodes[2].op, ast.USub):
-                    if isinstance(argumentNodes[2].operand, ast.Constant):
-                        self.debug_msg(lambda: f'[(Inline) Visit Constant]',
-                                       argumentNodes[2].operand)
-                        if argumentNodes[2].operand.value > 0:
-                            isDecrementing = True
-                    else:
-                        self.emitFatalError(
-                            'CUDA-Q requires step value on range() to be a constant.'
-                        )
-
-            # exclusive end
-            endVal = self.popValue()
-
-            # inclusive start
-            startVal = self.popValue()
-
-        elif len(argumentNodes) == 2:
-            stepVal = one
-            endVal = self.popValue()
-            startVal = self.popValue()
-        else:
-            stepVal = one
-            endVal = self.popValue()
-            startVal = zero
-
-        startVal = self.ifPointerThenLoad(startVal)
-        endVal = self.ifPointerThenLoad(endVal)
-        stepVal = self.ifPointerThenLoad(stepVal)
-
-        # Range expects integers
-        if F64Type.isinstance(startVal.type):
-            startVal = arith.FPToSIOp(self.getIntegerType(), startVal).result
-
-        if F64Type.isinstance(endVal.type):
-            endVal = arith.FPToSIOp(self.getIntegerType(), endVal).result
-
-        if F64Type.isinstance(stepVal.type):
-            stepVal = arith.FPToSIOp(self.getIntegerType(), stepVal).result
-
-        return startVal, endVal, stepVal, isDecrementing
-
     def needsStackSlot(self, type):
         """
         Return true if this is a type that has been "passed by value" and 
@@ -1266,6 +1491,8 @@ class PyASTBridge(ast.NodeVisitor):
             varNames = [node.targets[0].id]
 
         for i, value in enumerate(varValues):
+            if isinstance(value, Iterable):
+                value = value.materialize(self.loc)
             if self.isQuantumType(value.type) or cc.CallableType.isinstance(
                     value.type):
                 self.symbolTable[varNames[i]] = value
@@ -1595,160 +1822,17 @@ class PyASTBridge(ast.NodeVisitor):
                     "__len__ not supported on variables of this type.", node)
 
             if node.func.id == 'range':
-                startVal, endVal, stepVal, isDecrementing = self.__processRangeLoopIterationBounds(
-                    node.args)
-
-                iTy = self.getIntegerType(64)
-                zero = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 0))
-                one = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 1))
-
-                # The total number of elements in the iterable
-                # we are generating should be `N == endVal - startVal`
-                actualSize = arith.SubIOp(endVal, startVal).result
-                totalSize = math.AbsIOp(actualSize).result
-
-                # If the step is not == 1, then we also have
-                # to update the total size for the range iterable
-                actualSize = arith.DivSIOp(actualSize,
-                                           math.AbsIOp(stepVal).result).result
-                totalSize = arith.DivSIOp(totalSize,
-                                          math.AbsIOp(stepVal).result).result
-
-                # Create an array of i64 of the total size
-                arrTy = cc.ArrayType.get(self.ctx, iTy)
-                iterable = cc.AllocaOp(cc.PointerType.get(self.ctx, arrTy),
-                                       TypeAttr.get(iTy),
-                                       seqSize=totalSize).result
-
-                # Logic here is as follows:
-                # We are building an array like this
-                # array = [start, start +- step, start +- 2*step, start +- 3*step, ...]
-                # So we need to know the start and step (already have them),
-                # but we also need to keep track of a counter
-                counter = cc.AllocaOp(cc.PointerType.get(self.ctx, iTy),
-                                      TypeAttr.get(iTy)).result
-                cc.StoreOp(zero, counter)
-
-                def bodyBuilder(iterVar):
-                    loadedCounter = cc.LoadOp(counter).result
-                    tmp = arith.MulIOp(loadedCounter, stepVal).result
-                    arrElementVal = arith.AddIOp(startVal, tmp).result
-                    eleAddr = cc.ComputePtrOp(
-                        cc.PointerType.get(self.ctx, iTy), iterable,
-                        [loadedCounter],
-                        DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                              context=self.ctx))
-                    cc.StoreOp(arrElementVal, eleAddr)
-                    incrementedCounter = arith.AddIOp(loadedCounter, one).result
-                    cc.StoreOp(incrementedCounter, counter)
-
-                self.createInvariantForLoop(endVal,
-                                            bodyBuilder,
-                                            startVal=startVal,
-                                            stepVal=stepVal,
-                                            isDecrementing=isDecrementing)
-
-                self.pushValue(iterable)
-                self.pushValue(actualSize)
+                args = [self.popValue() for _ in range(len(self.valueStack))]
+                args.reverse()
+                self.pushValue(Range(*args))
                 return
 
             if node.func.id == 'enumerate':
-                # We have to have something "iterable" on the stack,
-                # could be coming from `range()` or an iterable like `qvector`
-                totalSize = None
-                iterable = None
-                iterEleTy = None
-                extractFunctor = None
-                if len(self.valueStack) == 1:
-                    # `qreg`-like or `stdvec`-like thing thing
-                    iterable = self.ifPointerThenLoad(self.popValue())
-                    # Create a new iterable, `alloca cc.struct<i64, T>`
-                    totalSize = None
-                    if quake.VeqType.isinstance(iterable.type):
-                        iterEleTy = self.getRefType()
-                        totalSize = quake.VeqSizeOp(self.getIntegerType(),
-                                                    iterable).result
-
-                        def extractFunctor(idxVal):
-                            return quake.ExtractRefOp(iterEleTy,
-                                                      iterable,
-                                                      -1,
-                                                      index=idxVal).result
-                    elif cc.StdvecType.isinstance(iterable.type):
-                        iterEleTy = cc.StdvecType.getElementType(iterable.type)
-                        totalSize = cc.StdvecSizeOp(self.getIntegerType(),
-                                                    iterable).result
-
-                        def extractFunctor(idxVal):
-                            arrEleTy = cc.ArrayType.get(self.ctx, iterEleTy)
-                            elePtrTy = cc.PointerType.get(self.ctx, iterEleTy)
-                            arrPtrTy = cc.PointerType.get(self.ctx, arrEleTy)
-                            vecPtr = cc.StdvecDataOp(arrPtrTy, iterable).result
-                            eleAddr = cc.ComputePtrOp(
-                                elePtrTy, vecPtr, [idxVal],
-                                DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                      context=self.ctx)).result
-                            return cc.LoadOp(eleAddr).result
-                    else:
-                        self.emitFatalError(
-                            "could not infer enumerate tuple type ({})".format(
-                                iterable.type), node)
-                else:
-                    if len(self.valueStack) != 2:
-                        msg = 'Error in AST processing, should have 2 values on the stack for enumerate {}'.format(
-                            ast.unparse(node) if hasattr(ast, 'unparse'
-                                                        ) else node)
-                        self.emitFatalError(msg)
-
-                    totalSize = self.popValue()
-                    iterable = self.popValue()
-                    arrTy = cc.PointerType.getElementType(iterable.type)
-                    iterEleTy = cc.ArrayType.getElementType(arrTy)
-
-                    def localFunc(idxVal):
-                        eleAddr = cc.ComputePtrOp(
-                            cc.PointerType.get(self.ctx, iterEleTy), iterable,
-                            [idxVal],
-                            DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                  context=self.ctx)).result
-                        return cc.LoadOp(eleAddr).result
-
-                    extractFunctor = localFunc
-
-                # Enumerate returns a iterable of tuple(i64, T) for type T
-                # Allocate an array of struct<i64, T> == tuple (for us)
-                structTy = cc.StructType.get(self.ctx,
-                                             [self.getIntegerType(), iterEleTy])
-                arrTy = cc.ArrayType.get(self.ctx, structTy)
-                enumIterable = cc.AllocaOp(cc.PointerType.get(self.ctx, arrTy),
-                                           TypeAttr.get(structTy),
-                                           seqSize=totalSize).result
-
-                # Now we need to loop through `enumIterable` and set the elements
-                def bodyBuilder(iterVar):
-                    # Create the struct
-                    element = cc.UndefOp(structTy)
-                    # Get the element from the iterable
-                    extracted = extractFunctor(iterVar)
-                    # Get the pointer to the enumeration iterable so we can set it
-                    eleAddr = cc.ComputePtrOp(
-                        cc.PointerType.get(self.ctx, structTy), enumIterable,
-                        [iterVar],
-                        DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                              context=self.ctx))
-                    # Set the index value
-                    element = cc.InsertValueOp(
-                        structTy, element, iterVar,
-                        DenseI64ArrayAttr.get([0], context=self.ctx)).result
-                    # Set the extracted element value
-                    element = cc.InsertValueOp(
-                        structTy, element, extracted,
-                        DenseI64ArrayAttr.get([1], context=self.ctx)).result
-                    cc.StoreOp(element, eleAddr)
-
-                self.createInvariantForLoop(totalSize, bodyBuilder)
-                self.pushValue(enumIterable)
-                self.pushValue(totalSize)
+                args = [self.popValue() for _ in range(len(self.valueStack))]
+                args.reverse()
+                if isinstance(args[0], IRValue):
+                    args[0] = self.ifPointerThenLoad(args[0])
+                self.pushValue(Enumerate(*args))
                 return
 
             if node.func.id == 'complex':
@@ -2094,6 +2178,9 @@ class PyASTBridge(ast.NodeVisitor):
                                 self.pushValue(maybeIterableSize)
                                 return
                 if len(self.valueStack) == 1:
+                    # TODO: re-evaluate this
+                    if isinstance(self.valueStack[0], Iterable):
+                        return
                     arrayTy = self.valueStack[0].type
                     if cc.PointerType.isinstance(arrayTy):
                         arrayTy = cc.PointerType.getElementType(arrayTy)
@@ -2945,6 +3032,7 @@ class PyASTBridge(ast.NodeVisitor):
                 "only support named targets in list comprehension", node)
 
         # Handle the case of `[qOp(q) for q in veq]`
+        # FIXME: This is assumption that is not always true. It might as well be that the we are calling kernels that return a value.
         if isinstance(
                 node.generators[0].iter,
                 ast.Name) and node.generators[0].iter.id in self.symbolTable:
@@ -2961,78 +3049,86 @@ class PyASTBridge(ast.NodeVisitor):
                 self.visit_For(forNode)
                 return
 
-        # General case of
-        # `listVar = [expr(i) for i in iterable]`
-        # Need to think of this as
-        # `listVar = stdvec(iterable.size)`
-        # `for i, r in enumerate(listVar):`
-        # `   listVar[i] = expr(r)`
-
-        # Let's handle the following `listVar` types
-        # `   %9 = cc.alloca !cc.array<!cc.stdvec<T> x 2> -> ptr<array<stdvec<T> x N>`
-        # or
-        # `    %3 = cc.alloca T[%2 : i64] -> ptr<array<T>>`
         self.visit(node.generators[0].iter)
+        assert len(self.valueStack) == 1
 
-        if len(self.valueStack) != 2:
+        iterable = _make_iterable(self.popValue())
+        if iterable is None:
             self.emitFatalError(
                 "Invalid CUDA-Q list creation via list comprehension - valid iterable not detected.",
                 node)
 
-        iterableSize = self.popValue()
-        iterable = self.popValue()
-        # We require that the iterable is a pointer to an `array<T>`
-        # FIXME revisit this
-        if not cc.PointerType.isinstance(iterable.type):
-            self.emitFatalError(
-                "CUDA-Q only considers general list comprehension on iterables from range(...)",
-                node)
+        start, size, step = iterable.get_loop_params(self.loc)
 
-        arrayTy = cc.PointerType.getElementType(iterable.type)
-        if not cc.ArrayType.isinstance(arrayTy):
-            self.emitFatalError(
-                "CUDA-Q only considers general list comprehension on iterables from range(...)",
-                node)
-
-        arrayEleTy = cc.ArrayType.getElementType(arrayTy)
-
-        # If `node.elt` is `ast.List`, then we want to allocate a
-        # `cc.array<cc.stdvec<i64> x len(node.elt.elts)>`
-        # otherwise we just want to allocate an `array<T>`
-        listValue = None
-        listComputePtrTy = arrayEleTy
-        if not isinstance(node.elt, ast.List):
-            listValue = cc.AllocaOp(cc.PointerType.get(self.ctx, arrayTy),
-                                    TypeAttr.get(arrayEleTy),
-                                    seqSize=iterableSize).result
+        targets = []
+        if isinstance(node.generators[0].target, ast.Name):
+            self.debug_msg(lambda: f'[(Inline) Visit Name]',
+                           node.generators[0].target)
+            targets.append(node.generators[0].target.id)
         else:
-            listComputePtrTy = cc.StdvecType.get(self.ctx, arrayEleTy)
-            arrOfStdvecTy = cc.ArrayType.get(self.ctx, listComputePtrTy)
-            listValue = cc.AllocaOp(cc.PointerType.get(self.ctx, arrOfStdvecTy),
-                                    TypeAttr.get(listComputePtrTy),
-                                    seqSize=iterableSize).result
+            # has to be a `ast.Tuple`
+            self.debug_msg(lambda: f'[(Inline) Visit Tuple]',
+                           node.generators[0].target)
+            for elt in node.generators[0].target.elts:
+                targets.append(elt.id)
 
-        def bodyBuilder(iterVar):
+        # Materialize the loop
+        loop = cc.LoopOp([start.type], [start], BoolAttr.get(False))
+
+        whileBlock = Block.create_at_start(loop.whileRegion, [start.type])
+        with InsertionPoint(whileBlock):
+            pred = IntegerAttr.get(self.getIntegerType(), 2)
+            test = arith.CmpIOp(pred, whileBlock.arguments[0], size).result
+            cc.ConditionOp(test, whileBlock.arguments)
+
+        stepBlock = Block.create_at_start(loop.stepRegion, [start.type])
+        with InsertionPoint(stepBlock):
+            incr = arith.AddIOp(stepBlock.arguments[0], step).result
+            cc.ContinueOp([incr])
+
+        bodyBlock = Block.create_at_start(loop.bodyRegion, [start.type])
+        with InsertionPoint(bodyBlock):
+            index = bodyBlock.arguments[0]
+            values = iterable.extract_element(index, self.loc)
+            if len(targets) != len(values):
+                raise CompilerError(
+                    f"Cannot unpack {len(values)} values into {len(targets)} targets"
+                )
+
             self.symbolTable.pushScope()
-            eleAddr = cc.ComputePtrOp(
-                cc.PointerType.get(self.ctx, arrayEleTy), iterable, [iterVar],
-                DenseI32ArrayAttr.get([kDynamicPtrIndex], context=self.ctx))
-            loadedEle = cc.LoadOp(eleAddr).result
-            self.symbolTable[node.generators[0].target.id] = loadedEle
+
+            # Assign values to targets
+            for target, value in zip(targets, values):
+                # FIXME: A target might be a variable that already exists
+                slot = cc.AllocaOp(cc.PointerType.get(self.ctx, value.type),
+                                   TypeAttr.get(value.type)).result
+                cc.StoreOp(value, slot)
+                self.symbolTable[target] = slot
+
             self.visit(node.elt)
+            # FIXME: This is assumption that is not always true. It might as well be that the body doesn't return a value.
+            assert len(self.valueStack) == 1
             result = self.popValue()
-            listValueAddr = cc.ComputePtrOp(
-                cc.PointerType.get(self.ctx, listComputePtrTy), listValue,
-                [iterVar],
+
+            # Now that we have the result, we can allocate the array we are creating
+            with InsertionPoint(loop):
+                array_type = cc.ArrayType.get(self.ctx, result.type)
+                array = cc.AllocaOp(cc.PointerType.get(self.ctx, array_type),
+                                    TypeAttr.get(result.type),
+                                    seqSize=size).result
+
+            array_address = cc.ComputePtrOp(
+                cc.PointerType.get(self.ctx, result.type), array, [index],
                 DenseI32ArrayAttr.get([kDynamicPtrIndex], context=self.ctx))
-            cc.StoreOp(result, listValueAddr)
+            cc.StoreOp(result, array_address)
+            cc.ContinueOp(bodyBlock.arguments)
+
             self.symbolTable.popScope()
 
-        self.createInvariantForLoop(iterableSize, bodyBuilder)
         self.pushValue(
-            cc.StdvecInitOp(cc.StdvecType.get(self.ctx, listComputePtrTy),
-                            listValue,
-                            length=iterableSize).result)
+            cc.StdvecInitOp(cc.StdvecType.get(self.ctx, result.type),
+                            array,
+                            length=size).result)
         return
 
     def visit_List(self, node):
@@ -3340,216 +3436,73 @@ class PyASTBridge(ast.NodeVisitor):
         range() and enumerate(). 
         """
         self.currentNode = node
-
-        # We can simplify `for i in range(N)` MLIR code immensely
-        # by just building a for loop with N as the upper value,
-        # no need to generate an array from the `range` call.
-        if isinstance(node.iter, ast.Call):
-            self.debug_msg(lambda: f'[(Inline) Visit Call]', node.iter)
-            if node.iter.func.id == 'range':
-                # This is a range(N) for loop, we just need
-                # the upper bound N for this loop
-                [self.visit(arg) for arg in node.iter.args]
-                startVal, endVal, stepVal, isDecrementing = self.__processRangeLoopIterationBounds(
-                    node.iter.args)
-
-                def bodyBuilder(iterVar):
-                    self.symbolTable.pushScope()
-                    self.symbolTable.add(node.target.id, iterVar)
-                    [self.visit(b) for b in node.body]
-                    self.symbolTable.popScope()
-
-                self.createInvariantForLoop(endVal,
-                                            bodyBuilder,
-                                            startVal=startVal,
-                                            stepVal=stepVal,
-                                            isDecrementing=isDecrementing)
-                return
-
-        # We can simplify `for i,j in enumerate(L)` MLIR code immensely
-        # by just building a for loop over the iterable object L and using
-        # the index into that iterable and the element.
-        if isinstance(node.iter, ast.Call):
-            self.debug_msg(lambda: f'[(Inline) Visit Call]', node.iter)
-            if node.iter.func.id == 'enumerate':
-                [self.visit(arg) for arg in node.iter.args]
-                if len(self.valueStack) == 2:
-                    iterable = self.popValue()
-                    self.popValue()
-                else:
-                    assert len(self.valueStack) == 1
-                    iterable = self.popValue()
-                iterable = self.ifPointerThenLoad(iterable)
-                totalSize = None
-                extractFunctor = None
-                varNames = []
-                for elt in node.target.elts:
-                    varNames.append(elt.id)
-
-                beEfficient = False
-                if quake.VeqType.isinstance(iterable.type):
-                    totalSize = quake.VeqSizeOp(self.getIntegerType(),
-                                                iterable).result
-
-                    def functor(seq, idx):
-                        q = quake.ExtractRefOp(self.getRefType(),
-                                               seq,
-                                               -1,
-                                               index=idx).result
-                        return [idx, q]
-
-                    extractFunctor = functor
-                    beEfficient = True
-                elif cc.StdvecType.isinstance(iterable.type):
-                    totalSize = cc.StdvecSizeOp(self.getIntegerType(),
-                                                iterable).result
-
-                    def functor(seq, idx):
-                        vecTy = cc.StdvecType.getElementType(seq.type)
-                        dataTy = cc.PointerType.get(self.ctx, vecTy)
-                        arrTy = vecTy
-                        if not cc.ArrayType.isinstance(arrTy):
-                            arrTy = cc.ArrayType.get(self.ctx, vecTy)
-                        dataArrTy = cc.PointerType.get(self.ctx, arrTy)
-                        data = cc.StdvecDataOp(dataArrTy, seq).result
-                        v = cc.ComputePtrOp(
-                            dataTy, data, [idx],
-                            DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                  context=self.ctx)).result
-                        return [idx, v]
-
-                    extractFunctor = functor
-                    beEfficient = True
-
-                if beEfficient:
-
-                    def bodyBuilder(iterVar):
-                        self.symbolTable.pushScope()
-                        values = extractFunctor(iterable, iterVar)
-                        for i, v in enumerate(values):
-                            self.symbolTable[varNames[i]] = v
-                        [self.visit(b) for b in node.body]
-                        self.symbolTable.popScope()
-
-                    self.createInvariantForLoop(totalSize, bodyBuilder)
-                    return
-
         self.visit(node.iter)
-        assert len(self.valueStack) > 0 and len(self.valueStack) < 3
+        assert len(self.valueStack) == 1
 
-        totalSize = None
-        iterable = None
-        extractFunctor = None
+        value = self.popValue()
+        if isinstance(value, IRValue):
+            value = self.ifPointerThenLoad(value)
+        iterable = _make_iterable(value)
+        if iterable is None:
+            self.emitFatalError("Invalid iterable", node)
+        start, size, step = iterable.get_loop_params(self.loc)
 
-        # It could be that its the only value we have,
-        # in which case we know we have for var in iterable,
-        # but we could also have another value on the stack,
-        # the total size of the iterable, produced by range() / enumerate()
-        if len(self.valueStack) == 1:
-            # Get the iterable from the stack
-            iterable = self.ifPointerThenLoad(self.popValue())
-            # we currently handle `veq` and `stdvec` types
-            if quake.VeqType.isinstance(iterable.type):
-                size = quake.VeqType.getSize(iterable.type)
-                if quake.VeqType.hasSpecifiedSize(iterable.type):
-                    totalSize = self.getConstantInt(size)
-                else:
-                    totalSize = quake.VeqSizeOp(self.getIntegerType(64),
-                                                iterable).result
-
-                def functor(iter, idx):
-                    return [
-                        quake.ExtractRefOp(self.getRefType(),
-                                           iter,
-                                           -1,
-                                           index=idx).result
-                    ]
-
-                extractFunctor = functor
-            elif cc.StdvecType.isinstance(iterable.type):
-                iterEleTy = cc.StdvecType.getElementType(iterable.type)
-                totalSize = cc.StdvecSizeOp(self.getIntegerType(),
-                                            iterable).result
-
-                def functor(iter, idxVal):
-                    elePtrTy = cc.PointerType.get(self.ctx, iterEleTy)
-                    arrTy = cc.ArrayType.get(self.ctx, iterEleTy)
-                    ptrArrTy = cc.PointerType.get(self.ctx, arrTy)
-                    vecPtr = cc.StdvecDataOp(ptrArrTy, iter).result
-                    eleAddr = cc.ComputePtrOp(
-                        elePtrTy, vecPtr, [idxVal],
-                        DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                              context=self.ctx)).result
-                    return [cc.LoadOp(eleAddr).result]
-
-                extractFunctor = functor
-
-            else:
-                self.emitFatalError('{} iterable type not supported.', node)
-
-        else:
-            # In this case, we are coming from range() or enumerate(),
-            # and the iterable is a cc.array and the total size of the
-            # array is on the stack, pop it here
-            totalSize = self.popValue()
-            # Get the iterable from the stack
-            iterable = self.popValue()
-
-            # Double check our types are right
-            assert cc.PointerType.isinstance(iterable.type)
-            arrayType = cc.PointerType.getElementType(iterable.type)
-            assert cc.ArrayType.isinstance(arrayType)
-            elementType = cc.ArrayType.getElementType(arrayType)
-
-            def functor(iter, idx):
-                eleAddr = cc.ComputePtrOp(
-                    cc.PointerType.get(self.ctx, elementType), iter, [idx],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                          context=self.ctx)).result
-                loaded = cc.LoadOp(eleAddr).result
-                if IntegerType.isinstance(elementType):
-                    return [loaded]
-                elif cc.StructType.isinstance(elementType):
-                    # Get struct types
-                    types = cc.StructType.getTypes(elementType)
-                    ret = []
-                    for i, ty in enumerate(types):
-                        ret.append(
-                            cc.ExtractValueOp(
-                                ty, loaded, [],
-                                DenseI32ArrayAttr.get([i],
-                                                      context=self.ctx)).result)
-                    return ret
-
-            extractFunctor = functor
-
-        # Get the name of the variable, VAR in for VAR in range(...),
-        # could be a tuple of names too
-        varNames = []
+        targets = []
         if isinstance(node.target, ast.Name):
             self.debug_msg(lambda: f'[(Inline) Visit Name]', node.target)
-            varNames.append(node.target.id)
+            targets.append(node.target.id)
         else:
             # has to be a `ast.Tuple`
             self.debug_msg(lambda: f'[(Inline) Visit Tuple]', node.target)
             for elt in node.target.elts:
-                varNames.append(elt.id)
+                targets.append(elt.id)
 
-        # We'll need a zero and one value of integer type
-        iTy = self.getIntegerType(64)
-        zero = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 0))
-        one = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 1))
+        # Materialize the loop
+        loop = cc.LoopOp([start.type], [start], BoolAttr.get(False))
 
-        def bodyBuilder(iterVar):
+        # Create while condition block
+        whileBlock = Block.create_at_start(loop.whileRegion, [start.type])
+        with InsertionPoint(whileBlock):
+            pred = IntegerAttr.get(self.getIntegerType(), 2)
+            test = arith.CmpIOp(pred, whileBlock.arguments[0], size).result
+            cc.ConditionOp(test, whileBlock.arguments)
+
+        # Create step block
+        stepBlock = Block.create_at_start(loop.stepRegion, [start.type])
+        with InsertionPoint(stepBlock):
+            incr = arith.AddIOp(stepBlock.arguments[0], step).result
+            cc.ContinueOp([incr])
+
+        # Create and populate the body block
+        bodyBlock = Block.create_at_start(loop.bodyRegion, [start.type])
+        with InsertionPoint(bodyBlock):
+            values = iterable.extract_element(bodyBlock.arguments[0], self.loc)
+            if len(targets) != len(values):
+                raise CompilerError(
+                    f"Cannot unpack {len(values)} values into {len(targets)} targets"
+                )
+
             self.symbolTable.pushScope()
-            # we set the extract functor above, use it here
-            values = extractFunctor(iterable, iterVar)
-            for i, v in enumerate(values):
-                self.symbolTable[varNames[i]] = v
-            [self.visit(b) for b in node.body]
-            self.symbolTable.popScope()
 
-        self.createInvariantForLoop(totalSize, bodyBuilder)
+            # Assign values to targets
+            for target, value in zip(targets, values):
+                # FIXME: A target might be a variable that already exists
+                if quake.RefType.isinstance(value.type):
+                    self.symbolTable[target] = value
+                else:
+                    slot = cc.AllocaOp(cc.PointerType.get(self.ctx, value.type),
+                                       TypeAttr.get(value.type)).result
+                    cc.StoreOp(value, slot)
+                    self.symbolTable[target] = slot
+
+            # Process the loop body
+            for stmt in node.body:
+                self.visit(stmt)
+
+            if not self.hasTerminator(bodyBlock):
+                cc.ContinueOp(bodyBlock.arguments)
+
+            self.symbolTable.popScope()
 
     def visit_While(self, node):
         """
