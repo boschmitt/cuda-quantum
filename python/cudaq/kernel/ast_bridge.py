@@ -14,6 +14,7 @@ import os
 import sys
 from collections import deque
 
+from . import ir
 from cudaq.mlir._mlir_libs._quakeDialects import (
     cudaq_runtime, load_intrinsic, gen_vector_of_complex_constant,
     register_all_dialects)
@@ -536,27 +537,19 @@ class PyASTBridge(ast.NodeVisitor):
         return the slot address.
         """
         if not cc.PointerType.isinstance(value.type):
-            slot = cc.AllocaOp(cc.PointerType.get(value.type),
-                               TypeAttr.get(value.type)).result
-            cc.StoreOp(value, slot)
+            slot = ir.alloca(value.type)
+            ir.store(value, slot)
             return slot
         return value
 
     def __createStdvecWithKnownValues(self, size, listElementValues):
         # Turn this List into a StdVec<T>
-        arrSize = self.getConstantInt(size)
-        arrTy = cc.ArrayType.get(listElementValues[0].type)
-        alloca = cc.AllocaOp(cc.PointerType.get(arrTy),
-                             TypeAttr.get(listElementValues[0].type),
-                             seqSize=arrSize).result
+        arrSize = ir.constant(size)
+        alloca = ir.alloca(listElementValues[0].type, size=arrSize)
 
         for i, v in enumerate(listElementValues):
-            eleAddr = cc.ComputePtrOp(
-                cc.PointerType.get(listElementValues[0].type), alloca,
-                [self.getConstantInt(i)],
-                DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                      context=self.ctx)).result
-            cc.StoreOp(v, eleAddr)
+            eleAddr = ir.compute_ptr(alloca, [ir.constant(i)])
+            ir.store(v, eleAddr)
 
         vecTy = listElementValues[0].type
         if cc.PointerType.isinstance(vecTy):
@@ -614,30 +607,21 @@ class PyASTBridge(ast.NodeVisitor):
             return sourcePtr
 
         sourceArrType = cc.ArrayType.get(sourceEleType)
-        sourceElePtrTy = cc.PointerType.get(sourceEleType)
         sourceArrElePtrTy = cc.PointerType.get(sourceArrType)
         sourceValue = self.ifPointerThenLoad(sourcePtr)
         sourceDataPtr = cc.StdvecDataOp(sourceArrElePtrTy, sourceValue).result
         sourceSize = cc.StdvecSizeOp(self.getIntegerType(), sourceValue).result
 
-        targetElePtrType = cc.PointerType.get(targetEleType)
-        targetTy = cc.ArrayType.get(targetEleType)
-        targetArrElePtrTy = cc.PointerType.get(targetTy)
         targetVecTy = cc.StdvecType.get(targetEleType)
-        targetPtr = cc.AllocaOp(targetArrElePtrTy,
-                                TypeAttr.get(targetEleType),
-                                seqSize=sourceSize).result
+        targetPtr = ir.alloca(targetEleType, size=sourceSize)
 
-        rawIndex = DenseI32ArrayAttr.get([kDynamicPtrIndex], context=self.ctx)
 
         def bodyBuilder(iterVar):
-            eleAddr = cc.ComputePtrOp(sourceElePtrTy, sourceDataPtr, [iterVar],
-                                      rawIndex).result
+            eleAddr = ir.compute_ptr(sourceDataPtr, [iterVar])
             loadedEle = cc.LoadOp(eleAddr).result
             castedEle = self.promoteOperandType(targetEleType, loadedEle)
-            targetEleAddr = cc.ComputePtrOp(targetElePtrType, targetPtr,
-                                            [iterVar], rawIndex).result
-            cc.StoreOp(castedEle, targetEleAddr)
+            targetEleAddr = ir.compute_ptr(targetPtr, [iterVar])
+            ir.store(castedEle, targetEleAddr)
 
         self.createInvariantForLoop(sourceSize, bodyBuilder)
         return cc.StdvecInitOp(targetVecTy, targetPtr, length=sourceSize).result
@@ -714,7 +698,7 @@ class PyASTBridge(ast.NodeVisitor):
         """
         if cc.StdvecType.isinstance(vector.type):
             return cc.StdvecSizeOp(self.getIntegerType(), vector).result
-        return self.getConstantInt(
+        return ir.constant(
             cc.ArrayType.getSize(cc.PointerType.getElementType(vector.type)))
 
     def __load_vector_element(self, vector, index):
@@ -734,16 +718,9 @@ class PyASTBridge(ast.NodeVisitor):
                     cc.ArrayType.get(cc.StdvecType.getElementType(
                         vector.type))), vector).result
             return cc.LoadOp(
-                cc.ComputePtrOp(
-                    cc.PointerType.get(cc.StdvecType.getElementType(
-                        vector.type)), data_ptr, [index],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex]))).result
+                ir.compute_ptr(data_ptr, [index])).result
         return cc.LoadOp(
-            cc.ComputePtrOp(
-                cc.PointerType.get(
-                    cc.ArrayType.getElementType(
-                        cc.PointerType.getElementType(vector.type))), vector,
-                [index], DenseI32ArrayAttr.get([kDynamicPtrIndex]))).result
+            ir.compute_ptr(vector, [index])).result
 
     def __get_superior_type(self, a, b):
         """
@@ -829,8 +806,8 @@ class PyASTBridge(ast.NodeVisitor):
         """
         Create an invariant loop using the CC dialect. 
         """
-        startVal = self.getConstantInt(0) if startVal == None else startVal
-        stepVal = self.getConstantInt(1) if stepVal == None else stepVal
+        startVal = ir.constant(0) if startVal == None else startVal
+        stepVal = ir.constant(1) if stepVal == None else stepVal
 
         iTy = self.getIntegerType()
         inputs = [startVal]
@@ -1065,9 +1042,8 @@ class PyASTBridge(ast.NodeVisitor):
                 blockArgs = self.entry.arguments
                 for i, b in enumerate(blockArgs):
                     if self.needsStackSlot(b.type):
-                        stackSlot = cc.AllocaOp(cc.PointerType.get(b.type),
-                                                TypeAttr.get(b.type)).result
-                        cc.StoreOp(b, stackSlot)
+                        stackSlot = ir.alloca(b.type)
+                        ir.store(b, stackSlot)
                         self.symbolTable[argNames[i]] = stackSlot
                     else:
                         self.symbolTable[argNames[i]] = b
@@ -1229,7 +1205,7 @@ class PyASTBridge(ast.NodeVisitor):
                     self.visit(node.value)
                     valueToStore = self.popValue()
                     # Store the value
-                    cc.StoreOp(valueToStore, ptrVal)
+                    ir.store(valueToStore, ptrVal)
                     return
 
                 elif isinstance(node.targets[0], ast.Attribute):
@@ -1247,7 +1223,7 @@ class PyASTBridge(ast.NodeVisitor):
                     self.visit(node.value)
                     valueToStore = self.popValue()
                     # Store the value
-                    cc.StoreOp(valueToStore, ptrVal)
+                    ir.store(valueToStore, ptrVal)
                     return
         else:
             if isinstance(node.value, ast.Tuple):
@@ -1284,7 +1260,7 @@ class PyASTBridge(ast.NodeVisitor):
             elif self.isMeasureResultType(value.type, value):
                 value = self.ifPointerThenLoad(value)
                 if varNames[i] in self.symbolTable:
-                    cc.StoreOp(
+                    ir.store(
                         value,
                         self.ifNotPointerThenStore(
                             self.symbolTable[varNames[i]]))
@@ -1295,7 +1271,7 @@ class PyASTBridge(ast.NodeVisitor):
                         f"CUDA-Q does not allow assignment to variables captured from parent scope.",
                         node)
 
-                cc.StoreOp(value, self.symbolTable[varNames[i]])
+                ir.store(value, self.symbolTable[varNames[i]])
             elif cc.PointerType.isinstance(value.type):
                 self.symbolTable[varNames[i]] = value
             elif cc.StructType.isinstance(value.type) and isinstance(
@@ -1305,9 +1281,8 @@ class PyASTBridge(ast.NodeVisitor):
                 self.symbolTable[varNames[i]] = value
             else:
                 # We should allocate and store
-                alloca = cc.AllocaOp(cc.PointerType.get(value.type),
-                                     TypeAttr.get(value.type)).result
-                cc.StoreOp(value, alloca)
+                alloca = ir.alloca(value.type)
+                ir.store(value, alloca)
                 self.symbolTable[varNames[i]] = alloca
 
     def visit_Attribute(self, node):
@@ -1340,10 +1315,7 @@ class PyASTBridge(ast.NodeVisitor):
                     # Handle the case where we have a struct member extraction, memory semantics
                     structIdx, memberTy = self.getStructMemberIdx(
                         node.attr, eleType)
-                    eleAddr = cc.ComputePtrOp(
-                        cc.PointerType.get(memberTy), value, [],
-                        DenseI32ArrayAttr.get([structIdx],
-                                              context=self.ctx)).result
+                    eleAddr = ir.compute_ptr(value, [structIdx])
 
                     if self.attributePushPointerValue:
                         self.pushValue(eleAddr)
@@ -1422,8 +1394,8 @@ class PyASTBridge(ast.NodeVisitor):
                     cudaq_module = importlib.import_module('cudaq')
                     channel_class = getattr(cudaq_module, node.attr)
                     self.pushValue(
-                        self.getConstantInt(channel_class.num_parameters))
-                    self.pushValue(self.getConstantInt(hash(channel_class)))
+                        ir.constant(channel_class.num_parameters))
+                    self.pushValue(ir.constant(hash(channel_class)))
                     return
 
     def visit_Call(self, node):
@@ -1633,30 +1605,24 @@ class PyASTBridge(ast.NodeVisitor):
 
                 # Create an array of i64 of the total size
                 arrTy = cc.ArrayType.get(iTy)
-                iterable = cc.AllocaOp(cc.PointerType.get(arrTy),
-                                       TypeAttr.get(iTy),
-                                       seqSize=totalSize).result
+                iterable = ir.alloca(iTy, size=totalSize)
 
                 # Logic here is as follows:
                 # We are building an array like this
                 # array = [start, start +- step, start +- 2*step, start +- 3*step, ...]
                 # So we need to know the start and step (already have them),
                 # but we also need to keep track of a counter
-                counter = cc.AllocaOp(cc.PointerType.get(iTy),
-                                      TypeAttr.get(iTy)).result
-                cc.StoreOp(zero, counter)
+                counter = ir.alloca(iTy)
+                ir.store(zero, counter)
 
                 def bodyBuilder(iterVar):
                     loadedCounter = cc.LoadOp(counter).result
                     tmp = arith.MulIOp(loadedCounter, stepVal).result
                     arrElementVal = arith.AddIOp(startVal, tmp).result
-                    eleAddr = cc.ComputePtrOp(
-                        cc.PointerType.get(iTy), iterable, [loadedCounter],
-                        DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                              context=self.ctx))
-                    cc.StoreOp(arrElementVal, eleAddr)
+                    eleAddr = ir.compute_ptr(iterable, [loadedCounter])
+                    ir.store(arrElementVal, eleAddr)
                     incrementedCounter = arith.AddIOp(loadedCounter, one).result
-                    cc.StoreOp(incrementedCounter, counter)
+                    ir.store(incrementedCounter, counter)
 
                 self.createInvariantForLoop(endVal,
                                             bodyBuilder,
@@ -1700,10 +1666,7 @@ class PyASTBridge(ast.NodeVisitor):
                             elePtrTy = cc.PointerType.get(iterEleTy)
                             arrPtrTy = cc.PointerType.get(arrEleTy)
                             vecPtr = cc.StdvecDataOp(arrPtrTy, iterable).result
-                            eleAddr = cc.ComputePtrOp(
-                                elePtrTy, vecPtr, [idxVal],
-                                DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                      context=self.ctx)).result
+                            eleAddr = ir.compute_ptr(vecPtr, [idxVal])
                             return cc.LoadOp(eleAddr).result
                     else:
                         self.emitFatalError(
@@ -1722,10 +1685,7 @@ class PyASTBridge(ast.NodeVisitor):
                     iterEleTy = cc.ArrayType.getElementType(arrTy)
 
                     def localFunc(idxVal):
-                        eleAddr = cc.ComputePtrOp(
-                            cc.PointerType.get(iterEleTy), iterable, [idxVal],
-                            DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                  context=self.ctx)).result
+                        eleAddr = ir.compute_ptr(iterable, [idxVal])
                         return cc.LoadOp(eleAddr).result
 
                     extractFunctor = localFunc
@@ -1734,9 +1694,7 @@ class PyASTBridge(ast.NodeVisitor):
                 # Allocate an array of struct<i64, T> == tuple (for us)
                 structTy = cc.StructType.get([self.getIntegerType(), iterEleTy])
                 arrTy = cc.ArrayType.get(structTy)
-                enumIterable = cc.AllocaOp(cc.PointerType.get(arrTy),
-                                           TypeAttr.get(structTy),
-                                           seqSize=totalSize).result
+                enumIterable = ir.alloca(structTy, size=totalSize)
 
                 # Now we need to loop through `enumIterable` and set the elements
                 def bodyBuilder(iterVar):
@@ -1745,10 +1703,7 @@ class PyASTBridge(ast.NodeVisitor):
                     # Get the element from the iterable
                     extracted = extractFunctor(iterVar)
                     # Get the pointer to the enumeration iterable so we can set it
-                    eleAddr = cc.ComputePtrOp(
-                        cc.PointerType.get(structTy), enumIterable, [iterVar],
-                        DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                              context=self.ctx))
+                    eleAddr = ir.compute_ptr(enumIterable, [iterVar])
                     # Set the index value
                     element = cc.InsertValueOp(
                         structTy, element, iterVar,
@@ -1757,7 +1712,7 @@ class PyASTBridge(ast.NodeVisitor):
                     element = cc.InsertValueOp(
                         structTy, element, extracted,
                         DenseI64ArrayAttr.get([1], context=self.ctx)).result
-                    cc.StoreOp(element, eleAddr)
+                    ir.store(element, eleAddr)
 
                 self.createInvariantForLoop(totalSize, bodyBuilder)
                 self.pushValue(enumIterable)
@@ -2175,8 +2130,7 @@ class PyASTBridge(ast.NodeVisitor):
                     self.pushValue(quake.MakeStruqOp(structTy, ctorArgs).result)
                     return
 
-                stackSlot = cc.AllocaOp(cc.PointerType.get(structTy),
-                                        TypeAttr.get(structTy)).result
+                stackSlot = ir.alloca(structTy)
 
                 if len(ctorArgs) != len(structTys):
                     self.emitFatalError(
@@ -2187,10 +2141,8 @@ class PyASTBridge(ast.NodeVisitor):
                 # loop over each type and `compute_ptr` / store
 
                 for i, ty in enumerate(structTys):
-                    eleAddr = cc.ComputePtrOp(
-                        cc.PointerType.get(ty), stackSlot, [],
-                        DenseI32ArrayAttr.get([i], context=self.ctx)).result
-                    cc.StoreOp(ctorArgs[i], eleAddr)
+                    eleAddr = ir.compute_ptr(stackSlot, [i])
+                    ir.store(ctorArgs[i], eleAddr)
                 self.pushValue(stackSlot)
                 return
 
@@ -2544,9 +2496,8 @@ class PyASTBridge(ast.NodeVisitor):
                         # If we have a F64 value, we want to
                         # store it to a pointer
                         if F64Type.isinstance(p.type):
-                            alloca = cc.AllocaOp(cc.PointerType.get(p.type),
-                                                 TypeAttr.get(p.type)).result
-                            cc.StoreOp(p, alloca)
+                            alloca = ir.alloca(p.type)
+                            ir.store(p, alloca)
                             params[i] = alloca
 
                     # The remaining arguments are the qubits
@@ -2602,7 +2553,7 @@ class PyASTBridge(ast.NodeVisitor):
                     if node.func.attr == 'back':
                         qrSize = quake.VeqSizeOp(self.getIntegerType(),
                                                  var).result
-                        one = self.getConstantInt(1)
+                        one = ir.constant(1)
                         endOff = arith.SubIOp(qrSize, one)
                         if len(node.args):
                             # extract the `subveq`
@@ -2624,11 +2575,11 @@ class PyASTBridge(ast.NodeVisitor):
                                                    index=endOff).result)
                         return
                     if node.func.attr == 'front':
-                        zero = self.getConstantInt(0)
+                        zero = ir.constant(0)
                         if len(node.args):
                             # extract the `subveq`
                             qrSize = self.popValue()
-                            one = self.getConstantInt(1)
+                            one = ir.constant(1)
                             offset = arith.SubIOp(qrSize, one)
                             dyna = IntegerAttr.get(self.getIntegerType(), -1)
                             self.pushValue(
@@ -3018,29 +2969,20 @@ class PyASTBridge(ast.NodeVisitor):
         listValue = None
         listComputePtrTy = arrayEleTy
         if not isinstance(node.elt, ast.List):
-            listValue = cc.AllocaOp(cc.PointerType.get(arrayTy),
-                                    TypeAttr.get(arrayEleTy),
-                                    seqSize=iterableSize).result
+            listValue = ir.alloca(arrayEleTy, size=iterableSize)
         else:
             listComputePtrTy = cc.StdvecType.get(arrayEleTy)
-            arrOfStdvecTy = cc.ArrayType.get(listComputePtrTy)
-            listValue = cc.AllocaOp(cc.PointerType.get(arrOfStdvecTy),
-                                    TypeAttr.get(listComputePtrTy),
-                                    seqSize=iterableSize).result
+            listValue = ir.alloca(listComputePtrTy, size=iterableSize)
 
         def bodyBuilder(iterVar):
             self.symbolTable.pushScope()
-            eleAddr = cc.ComputePtrOp(
-                cc.PointerType.get(arrayEleTy), iterable, [iterVar],
-                DenseI32ArrayAttr.get([kDynamicPtrIndex], context=self.ctx))
+            eleAddr = ir.compute_ptr(iterable, [iterVar])
             loadedEle = cc.LoadOp(eleAddr).result
             self.symbolTable[node.generators[0].target.id] = loadedEle
             self.visit(node.elt)
             result = self.popValue()
-            listValueAddr = cc.ComputePtrOp(
-                cc.PointerType.get(listComputePtrTy), listValue, [iterVar],
-                DenseI32ArrayAttr.get([kDynamicPtrIndex], context=self.ctx))
-            cc.StoreOp(result, listValueAddr)
+            listValueAddr = ir.compute_ptr(listValue, [iterVar])
+            ir.store(result, listValueAddr)
             self.symbolTable.popScope()
 
         self.createInvariantForLoop(iterableSize, bodyBuilder)
@@ -3134,14 +3076,10 @@ class PyASTBridge(ast.NodeVisitor):
         Convert constant values in the code to constant values in the MLIR. 
         """
         self.currentNode = node
-        if isinstance(node.value, bool):
-            self.pushValue(self.getConstantInt(node.value, 1))
+        if isinstance(node.value, (int, bool)):
+            self.pushValue(ir.constant(node.value))
             return
-
-        if isinstance(node.value, int):
-            self.pushValue(self.getConstantInt(node.value))
-            return
-
+        
         if isinstance(node.value, float):
             self.pushValue(self.getConstantFloat(node.value))
             return
@@ -3199,7 +3137,7 @@ class PyASTBridge(ast.NodeVisitor):
                         if upperInt < 0:
                             return arith.AddIOp(
                                 vectorSize,
-                                self.getConstantInt(upperInt)).result
+                                ir.constant(upperInt)).result
                 return val
 
             lowerVal, upperVal, stepVal = (None, None, None)
@@ -3207,7 +3145,7 @@ class PyASTBridge(ast.NodeVisitor):
                 self.visit(node.slice.lower)
                 lowerVal = fix_negative(self.popValue())
             else:
-                lowerVal = self.getConstantInt(0)
+                lowerVal = ir.constant(0)
             if node.slice.upper is not None:
                 self.visit(node.slice.upper)
                 upperVal = fix_negative(self.popValue())
@@ -3226,7 +3164,7 @@ class PyASTBridge(ast.NodeVisitor):
 
             if quake.VeqType.isinstance(var.type):
                 # Upper bound is exclusive
-                upperVal = arith.SubIOp(upperVal, self.getConstantInt(1)).result
+                upperVal = arith.SubIOp(upperVal, ir.constant(1)).result
                 dyna = IntegerAttr.get(self.getIntegerType(), -1)
                 self.pushValue(
                     quake.SubVeqOp(self.getVeqType(),
@@ -3237,17 +3175,13 @@ class PyASTBridge(ast.NodeVisitor):
                                    upper=upperVal).result)
             elif cc.StdvecType.isinstance(var.type):
                 eleTy = cc.StdvecType.getElementType(var.type)
-                ptrTy = cc.PointerType.get(eleTy)
                 arrTy = cc.ArrayType.get(eleTy)
                 ptrArrTy = cc.PointerType.get(arrTy)
                 nElementsVal = arith.SubIOp(upperVal, lowerVal).result
                 # need to compute the distance between `upperVal` and `lowerVal`
                 # then slice is `stdvecdataOp + computeptr[lower] + stdvecinit[ptr,distance]`
                 vecPtr = cc.StdvecDataOp(ptrArrTy, var).result
-                ptr = cc.ComputePtrOp(
-                    ptrTy, vecPtr, [lowerVal],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                          context=self.ctx)).result
+                ptr = ir.compute_ptr(vecPtr, [lowerVal])
                 self.pushValue(
                     cc.StdvecInitOp(var.type, ptr, length=nElementsVal).result)
             else:
@@ -3275,7 +3209,7 @@ class PyASTBridge(ast.NodeVisitor):
                     if idxConcrete == -1:
                         qrSize = quake.VeqSizeOp(self.getIntegerType(),
                                                  var).result
-                        one = self.getConstantInt(1)
+                        one = ir.constant(1)
                         endOff = arith.SubIOp(qrSize, one)
                         self.pushValue(
                             quake.ExtractRefOp(self.getRefType(),
@@ -3297,14 +3231,10 @@ class PyASTBridge(ast.NodeVisitor):
 
         if cc.StdvecType.isinstance(var.type):
             eleTy = cc.StdvecType.getElementType(var.type)
-            elePtrTy = cc.PointerType.get(eleTy)
             arrTy = cc.ArrayType.get(eleTy)
             ptrArrTy = cc.PointerType.get(arrTy)
             vecPtr = cc.StdvecDataOp(ptrArrTy, var).result
-            eleAddr = cc.ComputePtrOp(
-                elePtrTy, vecPtr, [idx],
-                DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                      context=self.ctx)).result
+            eleAddr = ir.compute_ptr(vecPtr, [idx])
             if self.subscriptPushPointerValue:
                 self.pushValue(eleAddr)
                 return
@@ -3322,10 +3252,7 @@ class PyASTBridge(ast.NodeVisitor):
                 arrayEleTy = cc.ArrayType.getElementType(ptrEleTy)
                 ptrEleTy = cc.PointerType.get(arrayEleTy)
                 casted = cc.CastOp(ptrEleTy, var).result
-                eleAddr = cc.ComputePtrOp(
-                    ptrEleTy, casted, [idx],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                          context=self.ctx)).result
+                eleAddr = ir.compute_ptr(casted, [idx])
                 self.pushValue(cc.LoadOp(eleAddr).result)
                 return
 
@@ -3349,9 +3276,7 @@ class PyASTBridge(ast.NodeVisitor):
                                     node)
 
             structPtr = self.ifNotPointerThenStore(var)
-            eleAddr = cc.ComputePtrOp(
-                cc.PointerType.get(memberTys[idxValue]), structPtr, [],
-                DenseI32ArrayAttr.get([idxValue], context=self.ctx)).result
+            eleAddr = ir.compute_ptr(structPtr, [idxValue])
 
             # Return the pointer if someone asked for it
             if self.subscriptPushPointerValue:
@@ -3442,10 +3367,7 @@ class PyASTBridge(ast.NodeVisitor):
                             arrTy = cc.ArrayType.get(vecTy)
                         dataArrTy = cc.PointerType.get(arrTy)
                         data = cc.StdvecDataOp(dataArrTy, seq).result
-                        v = cc.ComputePtrOp(
-                            dataTy, data, [idx],
-                            DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                                  context=self.ctx)).result
+                        v = ir.compute_ptr(data, [idx])
                         return [idx, v]
 
                     extractFunctor = functor
@@ -3482,7 +3404,7 @@ class PyASTBridge(ast.NodeVisitor):
             if quake.VeqType.isinstance(iterable.type):
                 size = quake.VeqType.getSize(iterable.type)
                 if quake.VeqType.hasSpecifiedSize(iterable.type):
-                    totalSize = self.getConstantInt(size)
+                    totalSize = ir.constant(size)
                 else:
                     totalSize = quake.VeqSizeOp(self.getIntegerType(64),
                                                 iterable).result
@@ -3506,10 +3428,7 @@ class PyASTBridge(ast.NodeVisitor):
                     arrTy = cc.ArrayType.get(iterEleTy)
                     ptrArrTy = cc.PointerType.get(arrTy)
                     vecPtr = cc.StdvecDataOp(ptrArrTy, iter).result
-                    eleAddr = cc.ComputePtrOp(
-                        elePtrTy, vecPtr, [idxVal],
-                        DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                              context=self.ctx)).result
+                    eleAddr = ir.compute_ptr(vecPtr, [idxVal])
                     return [cc.LoadOp(eleAddr).result]
 
                 extractFunctor = functor
@@ -3532,10 +3451,7 @@ class PyASTBridge(ast.NodeVisitor):
             elementType = cc.ArrayType.getElementType(arrayType)
 
             def functor(iter, idx):
-                eleAddr = cc.ComputePtrOp(
-                    cc.PointerType.get(elementType), iter, [idx],
-                    DenseI32ArrayAttr.get([kDynamicPtrIndex],
-                                          context=self.ctx)).result
+                eleAddr = ir.compute_ptr(iter, [idx])
                 loaded = cc.LoadOp(eleAddr).result
                 if IntegerType.isinstance(elementType):
                     return [loaded]
@@ -3601,7 +3517,7 @@ class PyASTBridge(ast.NodeVisitor):
                 # not equal to 0, then compare with 1
                 condPred = IntegerAttr.get(self.getIntegerType(), 1)
                 condition = arith.CmpIOp(condPred, condition,
-                                         self.getConstantInt(0)).result
+                                         ir.constant(0)).result
             cc.ConditionOp(condition, [])
             self.verbose = v
 
@@ -3630,7 +3546,7 @@ class PyASTBridge(ast.NodeVisitor):
             self.currentAssignVariableName = ''
             self.visit(node.values[0])
             lhs = self.popValue()
-            zero = self.getConstantInt(0, IntegerType(lhs.type).width)
+            zero = ir.constant(0, lhs.type)
 
             cond = arith.CmpIOp(
                 self.getIntegerAttr(self.getIntegerType(),
@@ -3790,9 +3706,8 @@ class PyASTBridge(ast.NodeVisitor):
 
             # Loop setup
             i1_type = self.getIntegerType(1)
-            accumulator = cc.AllocaOp(cc.PointerType.get(i1_type),
-                                      TypeAttr.get(i1_type)).result
-            cc.StoreOp(self.getConstantInt(0, 1), accumulator)
+            accumulator = ir.alloca(i1_type)
+            ir.store(ir.constant(0, i1_type), accumulator)
 
             # Element comparison loop
             def check_element(idx):
@@ -3809,7 +3724,7 @@ class PyASTBridge(ast.NodeVisitor):
                     arith.CmpFOp(fCondPred, promoted_left, promoted_element))
 
                 current = cc.LoadOp(accumulator).result
-                cc.StoreOp(arith.OrIOp(current, cmp_result.result), accumulator)
+                ir.store(arith.OrIOp(current, cmp_result.result), accumulator)
 
             self.createInvariantForLoop(self.__get_vector_size(right_val),
                                         check_element)
@@ -3817,7 +3732,7 @@ class PyASTBridge(ast.NodeVisitor):
             final_result = cc.LoadOp(accumulator).result
             if isinstance(op, ast.NotIn):
                 final_result = arith.XOrIOp(final_result,
-                                            self.getConstantInt(1, 1)).result
+                                            ir.constant(True)).result
             self.pushValue(final_result)
 
             return
@@ -3846,7 +3761,7 @@ class PyASTBridge(ast.NodeVisitor):
             # i -= 1 -> i = i - 1
             if IntegerType.isinstance(loaded.type):
                 res = arith.SubIOp(loaded, value).result
-                cc.StoreOp(res, target)
+                ir.store(res, target)
                 return
 
             self.emitFatalError("unhandled AugAssign.Sub types.", node)
@@ -3855,13 +3770,13 @@ class PyASTBridge(ast.NodeVisitor):
             # i += 1 -> i = i + 1
             if IntegerType.isinstance(loaded.type):
                 res = arith.AddIOp(loaded, value).result
-                cc.StoreOp(res, target)
+                ir.store(res, target)
                 return
             if F64Type.isinstance(loaded.type):
                 if IntegerType.isinstance(value.type):
                     value = arith.SIToFPOp(loaded.type, value).result
                 res = arith.AddFOp(loaded, value).result
-                cc.StoreOp(res, target)
+                ir.store(res, target)
                 return
 
             self.emitFatalError("unhandled AugAssign.Add types.", node)
@@ -3870,13 +3785,13 @@ class PyASTBridge(ast.NodeVisitor):
             # i *= 3 -> i = i * 3
             if IntegerType.isinstance(loaded.type):
                 res = arith.MulIOp(loaded, value).result
-                cc.StoreOp(res, target)
+                ir.store(res, target)
                 return
             elif F64Type.isinstance(loaded.type):
                 if IntegerType.isinstance(value.type):
                     value = arith.SIToFPOp(self.getFloatType(), value).result
                 res = arith.MulFOp(loaded, value).result
-                cc.StoreOp(res, target)
+                ir.store(res, target)
                 return
 
             self.emitFatalError("unhandled AugAssign.Mult types.", node)
@@ -3903,7 +3818,7 @@ class PyASTBridge(ast.NodeVisitor):
             # not equal to 0, then compare with 1
             condPred = IntegerAttr.get(self.getIntegerType(), 1)
             condition = arith.CmpIOp(condPred, condition,
-                                     self.getConstantInt(0)).result
+                                     ir.constant(0)).result
 
         ifOp = cc.IfOp([], condition, [])
         thenBlock = Block.create_at_start(ifOp.thenRegion, [])
@@ -3960,7 +3875,7 @@ class PyASTBridge(ast.NodeVisitor):
             resBuf = cc.StdvecDataOp(ptrArrTy, result).result
             # TODO Revisit this calculation
             byteWidth = 16 if ComplexType.isinstance(eleTy) else 8
-            eleSize = self.getConstantInt(byteWidth)
+            eleSize = ir.constant(byteWidth)
             dynSize = cc.StdvecSizeOp(self.getIntegerType(), result).result
             resBuf = cc.CastOp(ptrTy, resBuf)
             heapCopy = func.CallOp([ptrTy], symName,
@@ -4001,16 +3916,13 @@ class PyASTBridge(ast.NodeVisitor):
                 f'but was given {len(elementValues)}.', node)
 
         structTy = cc.StructType.getNamed("tuple", structTys)
-        stackSlot = cc.AllocaOp(cc.PointerType.get(structTy),
-                                TypeAttr.get(structTy)).result
+        stackSlot = ir.alloca(structTy)
 
         # loop over each type and `compute_ptr` / store
 
         for i, ty in enumerate(structTys):
-            eleAddr = cc.ComputePtrOp(
-                cc.PointerType.get(ty), stackSlot, [],
-                DenseI32ArrayAttr.get([i], context=self.ctx)).result
-            cc.StoreOp(elementValues[i], eleAddr)
+            eleAddr = ir.compute_ptr(stackSlot, [i])
+            ir.store(elementValues[i], eleAddr)
         self.pushValue(stackSlot)
         return
 
@@ -4034,7 +3946,7 @@ class PyASTBridge(ast.NodeVisitor):
             # Make our lives easier for -1 used in variable subscript extraction
             if isinstance(node.operand,
                           ast.Constant) and node.operand.value == 1:
-                self.pushValue(self.getConstantInt(-1))
+                self.pushValue(ir.constant(-1))
                 return
 
             if F64Type.isinstance(operand.type):
@@ -4048,7 +3960,7 @@ class PyASTBridge(ast.NodeVisitor):
                                          self.getConstantFloat(0.)).result,
                         operand).result)
             else:
-                negOne = self.getConstantInt(-1)
+                negOne = ir.constant(-1)
                 self.pushValue(arith.MulIOp(negOne, operand).result)
             return
 
@@ -4056,7 +3968,7 @@ class PyASTBridge(ast.NodeVisitor):
             if not IntegerType.isinstance(operand.type):
                 self.emitFatalError("UnaryOp Not() on non-integer value.", node)
 
-            zero = self.getConstantInt(0, IntegerType(operand.type).width)
+            zero = ir.constant(0, operand.type)
             self.pushValue(
                 arith.CmpIOp(IntegerAttr.get(self.getIntegerType(), 0), operand,
                              zero).result)
@@ -4281,10 +4193,8 @@ class PyASTBridge(ast.NodeVisitor):
                     elementValues = [
                         self.getConstantFloat(el, width=32) for el in value
                     ]
-                elif isinstance(value[0], int):
-                    elementValues = [self.getConstantInt(el) for el in value]
-                elif isinstance(value[0], bool):
-                    elementValues = [self.getConstantInt(el, 1) for el in value]
+                elif isinstance(value[0], (int, bool)):
+                    elementValues = [ir.constant(el) for el in value]
                 elif isinstance(value[0], complexType) or isinstance(
                         value[0], np.complex128):
                     elementValues = [
@@ -4307,10 +4217,8 @@ class PyASTBridge(ast.NodeVisitor):
 
             mlirValCreator = None
             self.dependentCaptureVars[node.id] = value
-            if isinstance(value, int):
-                mlirValCreator = lambda: self.getConstantInt(value)
-            elif isinstance(value, bool):
-                mlirValCreator = lambda: self.getConstantInt(value, 1)
+            if isinstance(value, (int, bool)):
+                mlirValCreator = lambda: ir.constant(value)
             elif isinstance(value, (float, np.float64)):
                 mlirValCreator = lambda: self.getConstantFloat(value)
             elif isinstance(value, np.float32):
@@ -4326,9 +4234,8 @@ class PyASTBridge(ast.NodeVisitor):
             if mlirValCreator != None:
                 with InsertionPoint.at_block_begin(self.entry):
                     mlirVal = mlirValCreator()
-                    stackSlot = cc.AllocaOp(cc.PointerType.get(mlirVal.type),
-                                            TypeAttr.get(mlirVal.type)).result
-                    cc.StoreOp(mlirVal, stackSlot)
+                    stackSlot = ir.alloca(mlirVal.type)
+                    ir.store(mlirVal, stackSlot)
                     # Store at the top-level
                     self.symbolTable.add(node.id, stackSlot, 0)
                     self.pushValue(stackSlot)
@@ -4349,8 +4256,8 @@ class PyASTBridge(ast.NodeVisitor):
                             'apply_noise kraus channels must have `num_parameters` constant class attribute specified.'
                         )
 
-                    self.pushValue(self.getConstantInt(value.num_parameters))
-                    self.pushValue(self.getConstantInt(hash(value)))
+                    self.pushValue(ir.constant(value.num_parameters))
+                    self.pushValue(ir.constant(hash(value)))
                     return
             except TypeError:
                 pass
