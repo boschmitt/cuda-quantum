@@ -1,0 +1,21 @@
+# ============================================================================ #
+# Copyright (c) 2022 - 2025 NVIDIA Corporation & Affiliates.                   #
+# All rights reserved.                                                         #
+#                                                                              #
+# This source code and the accompanying materials are made available under     #
+# the terms of the Apache License 2.0 which accompanies this distribution.     #
+# ============================================================================ #
+
+from __future__ import annotations
+from dataclasses import dataclass
+
+from cudaq.mlir.ir import Type, Value
+
+
+@dataclass(frozen=True, slots=True)
+class QRef:
+    value: Value
+
+    @property
+    def type(self) -> Type:
+        return self.value.type

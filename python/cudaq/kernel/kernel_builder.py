@@ -18,7 +18,6 @@ from cudaq.mlir.ir import (
     Block,
     ComplexType,
     Context,
-    DenseI32ArrayAttr,
     DictAttr,
     F32Type,
     F64Type,
@@ -41,6 +40,8 @@ from cudaq.mlir.dialects import (complex as complexDialect, arith, quake, cc,
 from cudaq.mlir._mlir_libs._quakeDialects import (
     cudaq_runtime, gen_vector_of_complex_constant, load_intrinsic,
     register_all_dialects)
+from . import ir
+from .ir import types as T
 from .captured_data import CapturedDataStorage
 from .common.fermionic_swap import fermionic_swap_builder
 from .common.givens import givens_builder
@@ -49,8 +50,6 @@ from .quake_value import QuakeValue
 from .utils import (emitErrorIfInvalidPauli, emitFatalError, emitWarning,
                     globalRegisteredOperations, mlirTypeFromPyType,
                     mlirTypeToPyType, nvqppPrefix)
-
-kDynamicPtrIndex: int = -2147483648
 
 qvector = cudaq_runtime.qvector
 
@@ -84,10 +83,10 @@ def __generalOperation(self,
         return
 
     # Must be a `veq`, get the size
-    size = quake.VeqSizeOp(self.getIntegerType(), target.mlirValue)
+    size = quake.VeqSizeOp(T.i64(self.ctx), target.mlirValue)
 
     def body(idx):
-        extracted = quake.ExtractRefOp(quake.RefType.get(context),
+        extracted = quake.ExtractRefOp(T.qref(context),
                                        target.mlirValue,
                                        -1,
                                        index=idx).result
@@ -100,7 +99,7 @@ def get_parameter_value(self, parameter):
     paramVal = parameter
     if isinstance(parameter, float):
         fty = mlirTypeFromPyType(float, self.ctx)
-        paramVal = arith.ConstantOp(fty, FloatAttr.get(fty, parameter))
+        paramVal = ir.constant(parameter, fty)
     elif isinstance(parameter, QuakeValue):
         paramVal = parameter.mlirValue
     return paramVal
@@ -358,66 +357,11 @@ class PyKernel(object):
         """
         return IntegerAttr.get(type, value)
 
-    def getIntegerType(self, width=64):
-        """
-        Return an MLIR `IntegerType` of the given bit width (defaults to 64 bits).
-        """
-        return IntegerType.get_signless(width)
-
-    def getConstantInt(self, value, width=64):
-        """
-        Create a constant integer operation and return its MLIR result Value.
-        Takes as input the concrete integer value. Can specify the integer bit width.
-        """
-        ty = self.getIntegerType(width)
-        return arith.ConstantOp(ty, self.getIntegerAttr(ty, value)).result
-
-    def getFloatType(self, width=64):
-        """
-        Return an MLIR float type (single or double precision).
-        """
-        # Note:
-        # `numpy.float64` is the same as `float` type, with width of 64 bit.
-        # `numpy.float32` type has width of 32 bit.
-        return F64Type.get() if width == 64 else F32Type.get()
-
     def getFloatAttr(self, type, value):
         """
         Return an MLIR float attribute (single or double precision).
         """
         return FloatAttr.get(type, value)
-
-    def getConstantFloat(self, value, width=64):
-        """
-        Create a constant float operation and return its MLIR result Value.
-        Takes as input the concrete float value.
-        """
-        ty = self.getFloatType(width=width)
-        return self.getConstantFloatWithType(value, ty)
-
-    def getConstantFloatWithType(self, value, ty):
-        """
-        Create a constant float operation and return its MLIR result Value.
-        Takes as input the concrete float value.
-        """
-        return arith.ConstantOp(ty, self.getFloatAttr(ty, value)).result
-
-    def getComplexType(self, width=64):
-        """
-        Return an MLIR complex type (single or double precision).
-        """
-        # Note:
-        # `numpy.complex128` is the same as `complex` type,
-        # with element width of 64bit (`np.complex64` and `float`)
-        # `numpy.complex64` type has element type of `np.float32`.
-        return self.getComplexTypeWithElementType(
-            self.getFloatType(width=width))
-
-    def getComplexTypeWithElementType(self, eTy):
-        """
-        Return an MLIR complex type (single or double precision).
-        """
-        return ComplexType.get(eTy)
 
     def simulationPrecision(self):
         """
@@ -433,8 +377,8 @@ class PyKernel(object):
         either `numpy.complex128` or `numpy.complex64`.
         """
         if self.simulationPrecision() == cudaq_runtime.SimulationPrecision.fp64:
-            return self.getComplexType(width=64)
-        return self.getComplexType(width=32)
+            return T.complex128(self.ctx)
+        return T.complex64(self.ctx)
 
     def ifPointerThenLoad(self, value):
         """
@@ -442,7 +386,7 @@ class PyKernel(object):
         and return that new value.
         """
         if cc.PointerType.isinstance(value.type):
-            return cc.LoadOp(value).result
+            return ir.load(value)
         return value
 
     def ifNotPointerThenStore(self, value):
@@ -452,9 +396,8 @@ class PyKernel(object):
         return the slot address.
         """
         if not cc.PointerType.isinstance(value.type):
-            slot = cc.AllocaOp(cc.PointerType.get(value.type, self.ctx),
-                               TypeAttr.get(value.type)).result
-            cc.StoreOp(value, slot)
+            slot = ir.alloca(value.type)
+            ir.store(value, slot)
             return slot
         return value
 
@@ -476,7 +419,7 @@ class PyKernel(object):
                                                       imag).result
             else:
                 real = self.promoteOperandType(floatType, operand)
-                imag = self.getConstantFloatWithType(0.0, floatType)
+                imag = ir.constant(0.0, floatType)
                 operand = complexDialect.CreateOp(complexType, real,
                                                   imag).result
 
@@ -498,43 +441,29 @@ class PyKernel(object):
         """
         Given a python runtime argument, create and return an equivalent constant MLIR Value.
         """
+
+        if isinstance(arg, T.InferableType):
+            return ir.constant(arg)
+
         pyType = type(arg)
         mlirType = mlirTypeFromPyType(pyType,
                                       self.ctx,
                                       argInstance=arg,
                                       argTypeToCompareTo=argTy)
 
-        if IntegerType.isinstance(mlirType):
-            return self.getConstantInt(arg, mlirType.width)
-
-        if F64Type.isinstance(mlirType):
-            return self.getConstantFloat(arg)
-
-        if ComplexType.isinstance(mlirType):
-            return complexDialect.CreateOp(mlirType,
-                                           self.getConstantFloat(arg.real),
-                                           self.getConstantFloat(
-                                               arg.imag)).result
-
         if cc.StdvecType.isinstance(mlirType):
-            size = self.getConstantInt(len(arg))
+            size = ir.constant(len(arg))
             eleTy = cc.StdvecType.getElementType(mlirType)
-            arrTy = cc.ArrayType.get(eleTy, context=self.ctx)
-            alloca = cc.AllocaOp(cc.PointerType.get(arrTy, self.ctx),
-                                 TypeAttr.get(eleTy),
-                                 seqSize=size).result
+            alloca = ir.alloca(eleTy, size=size)
 
             def body(idx):
-                eleAddr = cc.ComputePtrOp(
-                    cc.PointerType.get(eleTy, self.ctx), alloca, [idx],
-                    DenseI32ArrayAttr.get([-2147483648],
-                                          context=self.ctx)).result
+                eleAddr = ir._compute_ptr(alloca, [idx])
                 element = arg[body.counter]
                 elementVal = None
                 if IntegerType.isinstance(eleTy):
-                    elementVal = self.getConstantInt(element)
+                    elementVal = ir.constant(element, eleTy)
                 elif F64Type.isinstance(eleTy):
-                    elementVal = self.getConstantFloat(element)
+                    elementVal = ir.constant(element, eleTy)
                 elif cc.StdvecType.isinstance(eleTy):
                     elementVal = self.__getMLIRValueFromPythonArg(
                         element, eleTy)
@@ -543,13 +472,13 @@ class PyKernel(object):
                         f"CUDA-Q kernel builder could not process runtime list-like element type ({pyType})."
                     )
 
-                cc.StoreOp(elementVal, eleAddr)
+                ir.store(elementVal, eleAddr)
                 # Python is weird, but interesting.
                 body.counter += 1
 
             body.counter = 0
             self.createInvariantForLoop(size, body)
-            return cc.StdvecInitOp(cc.StdvecType.get(eleTy, self.ctx),
+            return cc.StdvecInitOp(T.stdvec(eleTy, self.ctx),
                                    alloca,
                                    length=size).result
 
@@ -566,10 +495,10 @@ class PyKernel(object):
         """
         Create an invariant loop using the CC dialect. 
         """
-        startVal = self.getConstantInt(0) if startVal == None else startVal
-        stepVal = self.getConstantInt(1) if stepVal == None else stepVal
+        startVal = ir.constant(0) if startVal == None else startVal
+        stepVal = ir.constant(1) if stepVal == None else stepVal
 
-        iTy = self.getIntegerType()
+        iTy = T.i64(self.ctx)
         inputs = [startVal]
         resultTys = [iTy]
 
@@ -744,7 +673,7 @@ class PyKernel(object):
         with self.ctx, self.insertPoint, self.loc:
             # If the initializer is an integer, create `veq<N>`
             if isinstance(initializer, int):
-                veqTy = quake.VeqType.get(initializer)
+                veqTy = T.veq(initializer)
                 return self.__createQuakeValue(quake.AllocaOp(veqTy).result)
 
             if isinstance(initializer, list):
@@ -789,7 +718,7 @@ class PyKernel(object):
                     raise RuntimeError(
                         "invalid input state for qalloc (not normalized)")
 
-                veqTy = quake.VeqType.get(int(numQubits))
+                veqTy = T.veq(int(numQubits))
                 qubits = quake.AllocaOp(veqTy).result
                 data = self.capturedDataStorage.storeArray(initializer)
 
@@ -800,10 +729,10 @@ class PyKernel(object):
             if isinstance(initializer, cudaq_runtime.State):
                 statePtr = self.capturedDataStorage.storeCudaqState(initializer)
 
-                i64Ty = self.getIntegerType()
+                i64Ty = T.i64(self.ctx)
                 numQubits = quake.GetNumberOfQubitsOp(i64Ty, statePtr).result
 
-                veqTy = quake.VeqType.get()
+                veqTy = T.veq()
                 qubits = quake.AllocaOp(veqTy, size=numQubits).result
                 init = quake.InitializeStateOp(veqTy, qubits, statePtr).result
                 return self.__createQuakeValue(init)
@@ -811,7 +740,7 @@ class PyKernel(object):
             # If the initializer is a QuakeValue, see if it is
             # an integer or a `stdvec` type
             if isinstance(initializer, QuakeValue):
-                veqTy = quake.VeqType.get()
+                veqTy = T.veq()
                 if IntegerType.isinstance(initializer.mlirValue.type):
                     # This is an integer size
                     return self.__createQuakeValue(
@@ -819,13 +748,13 @@ class PyKernel(object):
                                        size=initializer.mlirValue).result)
 
                 if cc.StdvecType.isinstance(initializer.mlirValue.type):
-                    size = cc.StdvecSizeOp(self.getIntegerType(),
+                    size = cc.StdvecSizeOp(T.i64(self.ctx),
                                            initializer.mlirValue).result
                     value = initializer.mlirValue
                     eleTy = cc.StdvecType.getElementType(value.type)
                     numQubits = math.CountTrailingZerosOp(size).result
                     qubits = quake.AllocaOp(veqTy, size=numQubits).result
-                    ptrTy = cc.PointerType.get(eleTy)
+                    ptrTy = T.ptr(eleTy)
                     data = cc.StdvecDataOp(ptrTy, value).result
                     init = quake.InitializeStateOp(veqTy, qubits, data).result
                     return self.__createQuakeValue(init)
@@ -837,11 +766,11 @@ class PyKernel(object):
                     if cc.StateType.isinstance(valueTy):
                         statePtr = initializer.mlirValue
 
-                        i64Ty = self.getIntegerType()
+                        i64Ty = T.i64(self.ctx)
                         numQubits = quake.GetNumberOfQubitsOp(i64Ty,
                                                               statePtr).result
 
-                        veqTy = quake.VeqType.get()
+                        veqTy = T.veq()
                         qubits = quake.AllocaOp(veqTy, size=numQubits).result
                         init = quake.InitializeStateOp(veqTy, qubits,
                                                        statePtr).result
@@ -849,7 +778,7 @@ class PyKernel(object):
 
             # If no initializer, create a single qubit
             if initializer == None:
-                qubitTy = quake.RefType.get()
+                qubitTy = T.qref()
                 return self.__createQuakeValue(quake.AllocaOp(qubitTy).result)
 
             raise RuntimeError(
@@ -885,9 +814,7 @@ class PyKernel(object):
                     arg = arg.get_pauli_word()
 
                 if isinstance(arg, str):
-                    retTy = cc.PointerType.get(
-                        cc.ArrayType.get(IntegerType.get_signless(8),
-                                         int(len(arg) + 1)))
+                    retTy = T.ptr(T.array(T.i8(), int(len(arg) + 1)))
                     pauliWordVal = cc.CreateStringLiteralOp(retTy, arg)
                 elif isinstance(arg, QuakeValue) and quake.VeqType.isinstance(
                         arg.mlirValue.type):
@@ -902,15 +829,13 @@ class PyKernel(object):
             thetaVal = None
             if isinstance(theta, float):
                 fty = mlirTypeFromPyType(float, self.ctx)
-                thetaVal = arith.ConstantOp(fty, FloatAttr.get(fty,
-                                                               theta)).result
+                thetaVal = ir.constant(theta, fty)
             else:
                 thetaVal = theta.mlirValue
 
             if len(qubitsList) > 0:
                 quantumVal = quake.ConcatOp(
-                    quake.VeqType.get(),
-                    [quantumVal] if quantumVal is not None else [] +
+                    T.veq(), [quantumVal] if quantumVal is not None else [] +
                     qubitsList).result
             quake.ExpPauliOp([], [thetaVal], [], [quantumVal],
                              pauli=pauliWordVal)
@@ -954,10 +879,10 @@ class PyKernel(object):
                 return
 
             # Must be a `veq`, get the size
-            size = quake.VeqSizeOp(self.getIntegerType(), target.mlirValue)
+            size = quake.VeqSizeOp(T.i64(), target.mlirValue)
 
             def body(idx):
-                extracted = quake.ExtractRefOp(quake.RefType.get(),
+                extracted = quake.ExtractRefOp(T.qref(),
                                                target.mlirValue,
                                                -1,
                                                index=idx).result
@@ -1054,8 +979,8 @@ class PyKernel(object):
             if quake.VeqType.hasSpecifiedSize(target.mlirValue.type):
                 size = quake.VeqType.getSize(target.mlirValue.type)
                 for i in range(size):
-                    extracted = quake.ExtractRefOp(quake.RefType.get(),
-                                                   target.mlirValue, i).result
+                    extracted = quake.ExtractRefOp(T.qref(), target.mlirValue,
+                                                   i).result
                     quake.ResetOp([], extracted)
                 return
             else:
@@ -1096,11 +1021,11 @@ class PyKernel(object):
             i1Ty = IntegerType.get_signless(1)
             qubitTy = target.mlirValue.type
             retTy = i1Ty
-            measTy = quake.MeasureType.get()
-            stdvecTy = cc.StdvecType.get(i1Ty)
+            measTy = T.measurement()
+            stdvecTy = T.stdvec(i1Ty)
             if quake.VeqType.isinstance(target.mlirValue.type):
                 retTy = stdvecTy
-                measTy = cc.StdvecType.get(measTy)
+                measTy = T.stdvec(measTy)
             if regName is not None:
                 res = quake.MzOp(measTy, [], [target.mlirValue],
                                  registerName=StringAttr.get(regName,
@@ -1142,11 +1067,11 @@ class PyKernel(object):
             i1Ty = IntegerType.get_signless(1)
             qubitTy = target.mlirValue.type
             retTy = i1Ty
-            measTy = quake.MeasureType.get()
-            stdvecTy = cc.StdvecType.get(i1Ty)
+            measTy = T.measurement()
+            stdvecTy = T.stdvec(i1Ty)
             if quake.VeqType.isinstance(target.mlirValue.type):
                 retTy = stdvecTy
-                measTy = cc.StdvecType.get(measTy)
+                measTy = T.stdvec(measTy)
             if regName is not None:
                 res = quake.MxOp(measTy, [], [target.mlirValue],
                                  registerName=StringAttr.get(regName,
@@ -1189,11 +1114,11 @@ class PyKernel(object):
             i1Ty = IntegerType.get_signless(1)
             qubitTy = target.mlirValue.type
             retTy = i1Ty
-            measTy = quake.MeasureType.get()
-            stdvecTy = cc.StdvecType.get(i1Ty)
+            measTy = T.measurement()
+            stdvecTy = T.stdvec(i1Ty)
             if quake.VeqType.isinstance(target.mlirValue.type):
                 retTy = stdvecTy
-                measTy = cc.StdvecType.get(measTy)
+                measTy = T.stdvec(measTy)
             if regName is not None:
                 res = quake.MyOp(measTy, [], [target.mlirValue],
                                  registerName=StringAttr.get(regName,
@@ -1351,11 +1276,11 @@ class PyKernel(object):
                             self.regCounter)))
                     self.regCounter += 1
 
-            if self.getIntegerType(1) != conditional.type:
+            if T.i1(self.ctx) != conditional.type:
                 # not equal to 0, then compare with 1
-                condPred = IntegerAttr.get(self.getIntegerType(), 1)
+                condPred = IntegerAttr.get(T.i1(self.ctx), 1)
                 conditional = arith.CmpIOp(condPred, condition,
-                                           self.getConstantInt(0)).result
+                                           ir.constant(0)).result
 
             ifOp = cc.IfOp([], conditional, [])
             thenBlock = Block.create_at_start(ifOp.thenRegion, [])
@@ -1408,8 +1333,7 @@ class PyKernel(object):
             stepVal = None
 
             if isinstance(start, int):
-                startVal = arith.ConstantOp(iTy, IntegerAttr.get(iTy,
-                                                                 start)).result
+                startVal = ir.constant(start, iTy)
             elif isinstance(start, QuakeValue):
                 startVal = start.mlirValue
             else:
@@ -1417,14 +1341,13 @@ class PyKernel(object):
                     f"invalid start value passed to for_loop: {start}")
 
             if isinstance(stop, int):
-                endVal = arith.ConstantOp(iTy, IntegerAttr.get(iTy,
-                                                               stop)).result
+                endVal = ir.constant(stop, iTy)
             elif isinstance(stop, QuakeValue):
                 endVal = stop.mlirValue
             else:
                 emitFatalError(f"invalid stop value passed to for_loop: {stop}")
 
-            stepVal = arith.ConstantOp(iTy, IntegerAttr.get(iTy, 1)).result
+            stepVal = ir.constant(1, iTy)
             inputs = [startVal]
             resultTys = [iTy]
             loop = cc.LoopOp(resultTys, inputs, BoolAttr.get(False))
