@@ -101,7 +101,7 @@ def testInt32Float32():
 
     @cudaq.kernel
     def kernelFloat32Int32(f: np.float32) -> np.int32:
-        return f
+        return np.int32(f)
 
     assert cudaq.run(kernelFloat32Int32, -1.2, shots_count=1) == [-1]
 
@@ -117,7 +117,7 @@ def testInt32Float64():
 
     @cudaq.kernel
     def kernelFloat64Int32() -> np.int32:
-        return -1.2
+        return np.int32(-1.2)
 
     assert cudaq.run(kernelFloat64Int32, shots_count=1) == [-1]
 
@@ -133,7 +133,7 @@ def testInt64Float32():
 
     @cudaq.kernel
     def kernelFloat32Int64(f: np.float32) -> int:
-        return f
+        return int(f)
 
     assert cudaq.run(kernelFloat32Int64, -2.3, shots_count=1) == [-2]
 
@@ -149,7 +149,7 @@ def testInt64Float64():
 
     @cudaq.kernel
     def kernelFloat64Int64() -> int:
-        return -1.2
+        return int(-1.2)
 
     assert cudaq.run(kernelFloat64Int64, shots_count=1) == [-1]
 
