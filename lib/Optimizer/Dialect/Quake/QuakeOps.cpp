@@ -127,16 +127,17 @@ Value quake::createConstantAlloca(PatternRewriter &builder, Location loc,
   auto newAlloca = [&]() {
     if (isa<quake::VeqType>(result.getType()) &&
         cast<quake::VeqType>(result.getType()).hasSpecifiedSize()) {
-      return builder.create<quake::AllocaOp>(
-          loc, cast<quake::VeqType>(result.getType()).getSize());
+      return quake::AllocaOp::create(builder, loc,
+                                     cast<quake::VeqType>(result.getType()).getSize());
     }
     auto constOp = cast<arith::ConstantOp>(args[0].getDefiningOp());
-    return builder.create<quake::AllocaOp>(
-        loc, static_cast<std::size_t>(
-                 cast<IntegerAttr>(constOp.getValue()).getInt()));
+    return quake::AllocaOp::create(builder, loc,
+                                   static_cast<std::size_t>(
+                                       cast<IntegerAttr>(constOp.getValue()).getInt()));
   }();
-  return builder.create<quake::RelaxSizeOp>(
-      loc, quake::VeqType::getUnsized(builder.getContext()), newAlloca);
+  return quake::RelaxSizeOp::create(builder, loc,
+                                    quake::VeqType::getUnsized(builder.getContext()),
+                                    newAlloca);
 }
 
 LogicalResult quake::AllocaOp::verify() {
