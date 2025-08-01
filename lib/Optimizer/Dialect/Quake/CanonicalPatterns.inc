@@ -94,8 +94,7 @@ struct ForwardConstantVeqSizePattern
     if (!veqTy.hasSpecifiedSize())
       return failure();
     auto resTy = veqSize.getType();
-    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(veqSize, veqTy.getSize(),
-                                                      resTy);
+    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(veqSize, resTy, veqTy.getSize());
     return success();
   }
 };
@@ -476,8 +475,7 @@ struct FoldInitStateSizePattern : public OpRewritePattern<quake::VeqSizeOp> {
               dyn_cast<quake::VeqType>(initState.getTargets().getType()))
         if (veqTy.hasSpecifiedSize()) {
           std::size_t numQubits = veqTy.getSize();
-          rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(veqSize, numQubits,
-                                                            veqSize.getType());
+          rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(veqSize, veqSize.getType(), numQubits);
           return success();
         }
     return failure();
@@ -554,7 +552,7 @@ struct ForwardRelaxedSizePattern : public OpRewritePattern<quake::RelaxSizeOp> {
                                 PatternRewriter &rewriter) const override {
     auto inpVec = relax.getInputVec();
     bool replaced = false;
-    rewriter.replaceOpWithIf(relax, inpVec, [&](OpOperand &use) {
+    rewriter.replaceUsesWithIf(relax, inpVec, [&](OpOperand &use) {
       bool res = false;
       if (Operation *user = use.getOwner())
         res = isQuakeOperation(user) && !isa<quake::ApplyOp>(user);

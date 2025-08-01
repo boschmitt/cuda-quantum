@@ -287,6 +287,14 @@ ParseResult quake::ApplyOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
+LogicalResult
+quake::ApplyOp::verifySymbolUses(mlir::SymbolTableCollection &symTab) {
+  if (auto calleeSym = getCallee())
+    if (!symTab.lookupNearestSymbolFrom<func::FuncOp>(*this, *calleeSym))
+      return failure();
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // ApplyNoiseOp
 //===----------------------------------------------------------------------===//
@@ -558,7 +566,7 @@ LogicalResult quake::InitializeStateOp::verify() {
   if (auto arrTy = dyn_cast<cudaq::cc::ArrayType>(ty)) {
     if (!arrTy.isUnknownSize()) {
       std::size_t size = arrTy.getSize();
-      if (!std::has_single_bit(size))
+      if (!llvm::has_single_bit(size))
         return emitOpError(
             "initialize state vector must be power of 2, but is " +
             std::to_string(size) + " instead.");
@@ -997,15 +1005,15 @@ using EffectsVectorImpl =
 /// reference or value form. A operation with modeless effects is not removed
 /// when its result(s) is (are) unused.
 [[maybe_unused]] inline static void
-getModelessEffectsImpl(EffectsVectorImpl &effects, ValueRange controls,
-                       ValueRange targets) {
-  for (auto v : controls)
-    effects.emplace_back(MemoryEffects::Read::get(), v,
+getModelessEffectsImpl(EffectsVectorImpl &effects, MutableArrayRef<OpOperand> controls,
+                       MutableArrayRef<OpOperand> targets) {
+  for (OpOperand &v : controls)
+    effects.emplace_back(MemoryEffects::Read::get(), &v,
                          SideEffects::DefaultResource::get());
-  for (auto v : targets) {
-    effects.emplace_back(MemoryEffects::Read::get(), v,
+  for (OpOperand &v : targets) {
+    effects.emplace_back(MemoryEffects::Read::get(), &v,
                          SideEffects::DefaultResource::get());
-    effects.emplace_back(MemoryEffects::Write::get(), v,
+    effects.emplace_back(MemoryEffects::Write::get(), &v,
                          SideEffects::DefaultResource::get());
   }
 }
@@ -1017,36 +1025,37 @@ getModelessEffectsImpl(EffectsVectorImpl &effects, ValueRange controls,
 /// have both a read and write effect. If the operand is in value form, the
 /// operation introduces no effects on that operand.
 inline static void getModedEffectsImpl(EffectsVectorImpl &effects,
-                                       ValueRange controls,
-                                       ValueRange targets) {
-  for (auto v : controls)
-    if (isa<quake::RefType, quake::VeqType>(v.getType()))
-      effects.emplace_back(MemoryEffects::Read::get(), v,
+                                       MutableArrayRef<OpOperand> controls,
+                                       MutableArrayRef<OpOperand> targets) {
+  for (OpOperand &v : controls)
+    if (isa<quake::RefType, quake::VeqType>(v.get().getType()))
+      effects.emplace_back(MemoryEffects::Read::get(), &v,
                            SideEffects::DefaultResource::get());
-  for (auto v : targets)
-    if (isa<quake::RefType, quake::VeqType>(v.getType())) {
-      effects.emplace_back(MemoryEffects::Read::get(), v,
+  for (OpOperand &v : targets)
+    if (isa<quake::RefType, quake::VeqType>(v.get().getType())) {
+      effects.emplace_back(MemoryEffects::Read::get(), &v,
                            SideEffects::DefaultResource::get());
-      effects.emplace_back(MemoryEffects::Write::get(), v,
+      effects.emplace_back(MemoryEffects::Write::get(), &v,
                            SideEffects::DefaultResource::get());
     }
 }
 
 /// Quake reset has modeless effects.
 void quake::getResetEffectsImpl(EffectsVectorImpl &effects,
-                                ValueRange targets) {
+                                MutableArrayRef<OpOperand> targets) {
   getModedEffectsImpl(effects, {}, targets);
 }
 
 /// Quake measurement operations have moded effects.
 void quake::getMeasurementEffectsImpl(EffectsVectorImpl &effects,
-                                      ValueRange targets) {
+                                      MutableArrayRef<OpOperand> targets) {
   getModedEffectsImpl(effects, {}, targets);
 }
 
 /// Quake quantum operators have moded effects.
 void quake::getOperatorEffectsImpl(EffectsVectorImpl &effects,
-                                   ValueRange controls, ValueRange targets) {
+                                   MutableArrayRef<OpOperand> controls,
+                                   MutableArrayRef<OpOperand> targets) {
   getModedEffectsImpl(effects, controls, targets);
 }
 
