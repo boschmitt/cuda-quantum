@@ -50,7 +50,7 @@ std::optional<APFloat> cudaq::opt::factory::getDoubleIfConstant(Value value) {
 Value cudaq::cc::getByteSizeOfType(OpBuilder &builder, Location loc, Type ty,
                                    bool useSizeOf) {
   auto createInt = [&](std::int32_t byteWidth) -> Value {
-    return builder.create<arith::ConstantIntOp>(loc, byteWidth, 64);
+    return arith::ConstantIntOp::create(builder, loc, byteWidth, 64);
   };
 
   // Handle primitive types with constant sizes.
@@ -91,8 +91,7 @@ Value cudaq::cc::getByteSizeOfType(OpBuilder &builder, Location loc, Type ty,
           return createInt(byteWidth);
         }
         if (useSizeOf)
-          return builder.create<cudaq::cc::SizeOfOp>(loc, builder.getI64Type(),
-                                                     strTy);
+          return cudaq::cc::SizeOfOp::create(builder, loc, builder.getI64Type(), strTy);
         return {};
       })
       .Case([&](cudaq::cc::ArrayType arrTy) -> Value {
@@ -103,8 +102,8 @@ Value cudaq::cc::getByteSizeOfType(OpBuilder &builder, Location loc, Type ty,
         if (!v)
           return {};
         auto scale = createInt(arrTy.getSize());
-        return builder.create<arith::MulIOp>(loc, builder.getI64Type(), v,
-                                             scale);
+        return arith::MulIOp::create(builder, loc, builder.getI64Type(), v,
+                                     scale);
       })
       .Case([&](cudaq::cc::SpanLikeType) -> Value {
         // Uniformly on the device size: {ptr, i64}
@@ -237,25 +236,21 @@ OpFoldResult cudaq::cc::CastOp::fold(FoldAdaptor adaptor) {
         if (getZint()) {
           val = truncate(val);
           APFloat fval(static_cast<float>(static_cast<std::uint64_t>(val)));
-          return builder.create<arith::ConstantFloatOp>(loc, fltTy, fval)
-              .getResult();
+          return arith::ConstantFloatOp::create(builder, loc, fltTy, fval).getResult();
         }
         if (getSint()) {
           APFloat fval(static_cast<float>(val));
-          return builder.create<arith::ConstantFloatOp>(loc, fltTy, fval)
-              .getResult();
+          return arith::ConstantFloatOp::create(builder, loc, fltTy, fval).getResult();
         }
       } else if (ty == dblTy) {
         if (getZint()) {
           val = truncate(val);
           APFloat fval(static_cast<double>(static_cast<std::uint64_t>(val)));
-          return builder.create<arith::ConstantFloatOp>(loc, dblTy, fval)
-              .getResult();
+          return arith::ConstantFloatOp::create(builder, loc, dblTy, fval).getResult();
         }
         if (getSint()) {
           APFloat fval(static_cast<double>(val));
-          return builder.create<arith::ConstantFloatOp>(loc, dblTy, fval)
-              .getResult();
+          return arith::ConstantFloatOp::create(builder, loc, dblTy, fval).getResult();
         }
       }
     }
@@ -269,25 +264,21 @@ OpFoldResult cudaq::cc::CastOp::fold(FoldAdaptor adaptor) {
       if (ty == fltTy) {
         float f = val.convertToDouble();
         APFloat fval(f);
-        return builder.create<arith::ConstantFloatOp>(loc, fltTy, fval)
-            .getResult();
+        return arith::ConstantFloatOp::create(builder, loc, fltTy, fval).getResult();
       }
       if (ty == dblTy) {
         APFloat fval{val.convertToDouble()};
-        return builder.create<arith::ConstantFloatOp>(loc, dblTy, fval)
-            .getResult();
+        return arith::ConstantFloatOp::create(builder, loc, dblTy, fval).getResult();
       }
       if (isa<IntegerType>(ty)) {
         auto width = ty.getIntOrFloatBitWidth();
         if (getZint()) {
           std::uint64_t v = val.convertToDouble();
-          return builder.create<arith::ConstantIntOp>(loc, v, width)
-              .getResult();
+          return arith::ConstantIntOp::create(builder, loc, v, width).getResult();
         }
         if (getSint()) {
           std::int64_t v = val.convertToDouble();
-          return builder.create<arith::ConstantIntOp>(loc, v, width)
-              .getResult();
+          return arith::ConstantIntOp::create(builder, loc, v, width).getResult();
         }
       }
     }
@@ -307,7 +298,7 @@ OpFoldResult cudaq::cc::CastOp::fold(FoldAdaptor adaptor) {
           auto rePart = builder.getFloatAttr(eleTy, APFloat{reVal});
           auto imPart = builder.getFloatAttr(eleTy, APFloat{imVal});
           auto cv = builder.getArrayAttr({rePart, imPart});
-          return builder.create<complex::ConstantOp>(loc, ty, cv).getResult();
+          return complex::ConstantOp::create(builder, loc, ty, cv).getResult();
         }
         if (eleTy == dblTy) {
           double reVal = reFp.getValue().convertToDouble();
@@ -315,7 +306,7 @@ OpFoldResult cudaq::cc::CastOp::fold(FoldAdaptor adaptor) {
           auto rePart = builder.getFloatAttr(eleTy, APFloat{reVal});
           auto imPart = builder.getFloatAttr(eleTy, APFloat{imVal});
           auto cv = builder.getArrayAttr({rePart, imPart});
-          return builder.create<complex::ConstantOp>(loc, ty, cv).getResult();
+          return complex::ConstantOp::create(builder, loc, ty, cv).getResult();
         }
       }
     }
@@ -1381,7 +1372,7 @@ static void ensureStepTerminator(OpBuilder &builder, OperationState &result,
   auto addContinue = [&]() {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(block);
-    builder.create<cudaq::cc::ContinueOp>(result.location);
+    cudaq::cc::ContinueOp::create(builder, result.location);
   };
   if (block->empty()) {
     addContinue();
@@ -1817,7 +1808,7 @@ static void ensureScopeRegionTerminator(OpBuilder &builder,
   }
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToEnd(block);
-  builder.create<cudaq::cc::ContinueOp>(result.location);
+  cudaq::cc::ContinueOp::create(builder, result.location);
 }
 
 ParseResult cudaq::cc::ScopeOp::parse(OpAsmParser &parser,
@@ -2002,7 +1993,7 @@ static void ensureIfRegionTerminator(OpBuilder &builder, OperationState &result,
   }
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToEnd(block);
-  builder.create<cudaq::cc::ContinueOp>(result.location);
+  cudaq::cc::ContinueOp::create(builder, result.location);
 }
 
 ParseResult cudaq::cc::IfOp::parse(OpAsmParser &parser,
