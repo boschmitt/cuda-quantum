@@ -69,8 +69,6 @@ endif()
 
 # Project globals
 # ==============================================================================
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED on)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
 # Set warnings as errors by default. 
@@ -111,10 +109,6 @@ endif()
 # Generate a CompilationDatabase (compile_commands.json file) for our build,
 # for use by clang_complete, YouCompleteMe, etc.
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
-
-if(NOT LLVM_VERSION_MAJOR)
-  set(LLVM_VERSION_MAJOR 16)
-endif()
 
 find_package(Git QUIET)
 if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
@@ -250,141 +244,21 @@ endif()
 find_package(ZLIB REQUIRED)
 include(ExternalProject)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose Release or Debug" FORCE)
-endif()
-
-# Find and configure LLVM, Clang and MLIR
+# Build type
 # ==============================================================================
-# The user can specify the path to LLVM cmake directory using
-# `-DLLVM_DIR=path/to/cmake/llvm`.  If this definition is not provided, we look
-# for `llvm-config` tool.  The user can also provide a LLVM version to look for
-# using `LLVM_VERSION_MAJOR`, e.g. "-LLVM_VERSION_MAJOR=16".  Note that this
-# version variable is set to the latest LLVM version by default, and setting it
-# to an older version might break the project.
-find_package(LLVM ${LLVM_VERSION_MAJOR} CONFIG QUIET)
 
-if(NOT LLVM_DIR)
-  message(STATUS "LLVM_DIR not found, will try with llvm-config executable.")
-
-  macro(find_llvm_config name version_major)
-    set(extra_args ${ARGN})
-    list(LENGTH extra_args extra_count)
-    if (${extra_count} GREATER 0)
-      list(GET extra_args 0 path)
-      find_program(LLVM_CONFIG NAMES ${name} PATHS ${path} NO_DEFAULT_PATH
-        DOC "Path to llvm-config tool")
-    else()
-      find_program(LLVM_CONFIG NAMES ${name} DOC "Path to llvm-config tool")
-    endif()
-
-    if(LLVM_CONFIG)
-      execute_process(
-        COMMAND ${LLVM_CONFIG} --version
-        RESULT_VARIABLE LLVM_CONFIG_RESULT
-        OUTPUT_VARIABLE LLVM_CONFIG_VERSION
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-      )
-
-      if(NOT LLVM_CONFIG_VERSION MATCHES "^${version_major}[.][0-9]+[.][0-9]+")
-        unset(LLVM_CONFIG CACHE)
-      endif()
-    endif()
-  endmacro()
-
-  # First we try to find llvm-config in the llvm submodule.
-  find_llvm_config(llvm-config ${LLVM_VERSION_MAJOR}
-    "${CMAKE_CURRENT_SOURCE_DIR}/tpls/llvm/build/bin")
-
-  # Try to find a system llvm-config and make sure it is the correct version.
-  if(NOT LLVM_CONFIG)
-    find_llvm_config(llvm-config ${LLVM_VERSION_MAJOR})
-  endif()
-
-  # If it is not the correct version, try finding llvm-config-VERSION
-  if(NOT LLVM_CONFIG)
-    find_llvm_config(llvm-config-${LLVM_VERSION_MAJOR} ${LLVM_VERSION_MAJOR})
-    if (LLVM_CONFIG)
-      set(NVQPP_LLVM_EXECUTABLE_SUFFIX -${LLVM_VERSION_MAJOR})
-    endif()
-  endif()
-
-  execute_process(
-    COMMAND ${LLVM_CONFIG} --cmakedir
-    RESULT_VARIABLE LLVM_CONFIG_RESULT
-    OUTPUT_VARIABLE LLVM_CONFIG_CMAKE_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-  )
-
-  if(LLVM_CONFIG_RESULT)
-    message(FATAL_ERROR
-      "Could not find suitable llvm-config(-${LLVM_VERSION_MAJOR}).\
-      \nTry providing valid -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm.")
-  else()
-    find_package(LLVM ${LLVM_VERSION_MAJOR} REQUIRED CONFIG
-      HINTS ${LLVM_CONFIG_CMAKE_DIR} NO_DEFAULT_PATH)
-  endif()
+set(DEFAULT_CMAKE_BUILD_TYPE "Release")
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "No build type selected, default to ${DEFAULT_CMAKE_BUILD_TYPE}")
+  set(CMAKE_BUILD_TYPE "${DEFAULT_CMAKE_BUILD_TYPE}" CACHE STRING "Build type (default ${DEFAULT_CMAKE_BUILD_TYPE})" FORCE)
 endif()
 
-if(NOT MLIR_DIR)
-  set(MLIR_DIR ${LLVM_BINARY_DIR}/lib/cmake/mlir)
-endif()
-
-find_package(MLIR REQUIRED CONFIG)
-
-if(NOT Clang_DIR)
-  set(Clang_DIR ${LLVM_BINARY_DIR}/lib/cmake/clang)
-endif()
-
-find_package(Clang CONFIG)
-if (NOT Clang_FOUND) 
-  message(STATUS "Clang not found, turning off C++ Frontend.")
-  set (CUDAQ_DISABLE_CPP_FRONTEND ON)
-endif()
-
-message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
-message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
-message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
-
-set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/bin)
-set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
-set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
-
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
-
-include(TableGen)
-include(AddLLVM)
-include(AddMLIR)
-
-# Add LLVM, Clang and MLIR headers to the include path
-include_directories(SYSTEM
-  ${LLVM_INCLUDE_DIRS}
-  ${CLANG_INCLUDE_DIRS}
-  ${MLIR_INCLUDE_DIRS})
-
-link_directories(${LLVM_BUILD_LIBRARY_DIR})
-add_definitions(${LLVM_DEFINITIONS})
-
-# Define the default arguments to use with 'lit', and an option for the user to
-# override.
-set(LIT_ARGS_DEFAULT "-sv")
-
-if(MSVC_IDE OR XCODE)
-  set(LIT_ARGS_DEFAULT "${LIT_ARGS_DEFAULT} --no-progress-bar")
-endif()
-
-set(LLVM_LIT_ARGS "${LIT_ARGS_DEFAULT}" CACHE STRING "Default options for lit")
-
-# CUDA Quantum configuration
-# ==============================================================================
 message(STATUS "Build type is ${CMAKE_BUILD_TYPE}")
 
-set(CUDAQ_MAIN_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}) # --src-root
-set(CUDAQ_MAIN_INCLUDE_DIR ${CUDAQ_MAIN_SRC_DIR}/include)
+# Helpers
+# ==============================================================================
+
+set(CUDAQ_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}) # --src-root
 
 set(CUDAQ_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CUDAQ_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
@@ -394,9 +268,43 @@ set(CUDAQ_LIBRARY_DIR ${CMAKE_BINARY_DIR}/lib)
 set(CUDAQ_TOOLS_DIR ${CMAKE_BINARY_DIR}/bin)
 
 list(APPEND CMAKE_MODULE_PATH "${CUDAQ_CMAKE_DIR}")
-
 include(AddCUDAQ)
 include(BuildHelpers)
+
+# Python
+# ==============================================================================
+
+if (CUDAQ_ENABLE_PYTHON)
+  find_package(Python 3.10 COMPONENTS Interpreter Development.Module REQUIRED)
+
+  # Detect the installed nanobind package and import it into CMake
+  execute_process(
+    COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+    OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT)
+
+  find_package(nanobind CONFIG REQUIRED)
+endif()
+
+# MLIR/LLVM Dependency
+# ==============================================================================
+
+option(CUDAQ_BUILD_BUNDLED_LLVM "Build bundled LLVM" ON)
+
+include(cudaq_llvm)
+
+if(CUDAQ_BUILD_BUNDLED_LLVM)
+  cudaq_llvm_configure_bundled()
+else()
+  message(FATAL_ERROR "The use of an installed LLVM is not yet supported.")
+endif()
+
+# TODO: Find a better place for these?
+include_directories(${MLIR_INCLUDE_DIRS})
+include_directories(${LLVM_INCLUDE_DIRS})
+include_directories(${CLANG_INCLUDE_DIRS})
+
+# CUDA Quantum configuration
+# ==============================================================================
 
 # Add CUDA Quantum files to the include path
 include_directories(BEFORE
@@ -572,27 +480,6 @@ if(CUDAQ_BUILD_TESTS)
 endif()
 
 if (CUDAQ_ENABLE_PYTHON)
-  find_package(Python 3 COMPONENTS Interpreter Development)
-  
-  # Apply specific patch to pybind11 for our documentation.
-  # Only apply the patch if not already applied.
-  execute_process(COMMAND ${GIT_EXECUTABLE} -C tpls/pybind11/ apply ../customizations/pybind11/pybind.h.diff --ignore-whitespace --reverse --check
-                  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                  RESULT_VARIABLE GIT_PATCH_RESULT
-                  ERROR_QUIET)
-  if (NOT GIT_PATCH_RESULT EQUAL "0")
-    execute_process(COMMAND ${GIT_EXECUTABLE} -C tpls/pybind11/ apply ../customizations/pybind11/pybind.h.diff --ignore-whitespace
-                    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                    RESULT_VARIABLE GIT_PATCH_RESULT)
-  endif()
-  if (NOT GIT_PATCH_RESULT EQUAL "0")
-    message(FATAL_ERROR "Applying patch to submodule failed with ${GIT_PATCH_RESULT}, please update patch")
-  endif()
-  
-  # Regarding the use of PyBind, we need to be careful that the same STL is used for any 
-  # Python bindings generated as part of the CUDA-Q build and bindings generated for 
-  # third party CUDA-Q libraries; see also https://github.com/pybind/pybind11/issues/1262
-  add_subdirectory(tpls/pybind11)
   add_subdirectory(python)
 endif()
 
@@ -627,3 +514,5 @@ if (CUDAQ_EXTERNAL_NVQIR_SIMS)
     add_target_libs_to_wheel(${LIB_SO_OR_CONFIG_FILE})
   endwhile()
 endif()
+
+install(EXPORT CUDAQTargets DESTINATION lib/cmake/cudaq)

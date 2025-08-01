@@ -6,7 +6,7 @@
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
 
-set(LLVM_LINK_COMPONENTS Support ${LLVM_TARGETS_TO_BUILD})
+set(LLVM_LINK_COMPONENTS Support)
 
 set(EXE_NAME cudaq-target-conf)
 add_llvm_executable(${EXE_NAME} cudaq-target-conf.cpp)

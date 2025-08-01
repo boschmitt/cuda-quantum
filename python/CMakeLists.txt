@@ -51,7 +51,7 @@ add_custom_target(
 
 add_dependencies(CUDAQuantumPythonModules CopyPythonFiles)
 
-add_subdirectory(runtime/cudaq/domains/plugins)
+#add_subdirectory(runtime/cudaq/domains/plugins)
 
 if (NOT SKBUILD)
   install(DIRECTORY cudaq DESTINATION .)
@@ -77,7 +77,7 @@ if(CUDAQ_BUILD_TESTS)
   endif()
 endif()
 
-add_subdirectory(runtime/interop)
+#add_subdirectory(runtime/interop)
 
 if (CUDENSITYMAT_ROOT AND CUDA_FOUND)
   add_subdirectory(runtime/cudaq/dynamics)

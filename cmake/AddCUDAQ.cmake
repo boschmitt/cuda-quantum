@@ -56,14 +56,68 @@ endfunction()
 
 function(add_cudaq_library name)
   add_mlir_library(${ARGV} DISABLE_INSTALL)
+  set_target_properties(${name} PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CUDAQ_LIBRARY_DIR}"
+    ARCHIVE_OUTPUT_DIRECTORY "${CUDAQ_LIBRARY_DIR}"
+  )
   add_cudaq_library_install(${name})
 endfunction()
+
+macro(add_cudaq_executable name)
+  add_llvm_executable(${name} ${ARGN})
+  llvm_update_compile_flags(${name})
+  set_target_properties(${name} PROPERTIES FOLDER "cudaq executables")
+endmacro()
+
+macro(add_cudaq_tool name)
+  if (NOT CUDAQ_BUILD_TOOLS)
+    set(EXCLUDE_FROM_ALL ON)
+  endif()
+
+  add_cudaq_executable(${name} ${ARGN})
+  set_target_properties(${name} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CUDAQ_TOOLS_DIR}"
+  )
+  if (CUDAQ_BUILD_TOOLS)
+    get_target_export_arg(${name} CUDAQ export_to_cudaq_targets)
+    install(TARGETS ${name}
+      ${export_to_cudaq_targets}
+      RUNTIME DESTINATION "${CUDAQ_TOOLS_INSTALL_DIR}"
+      COMPONENT ${name})
+
+    if(NOT CMAKE_CONFIGURATION_TYPES)
+      add_llvm_install_targets(install-${name}
+        DEPENDS ${name}
+        COMPONENT ${name})
+    endif()
+    set_property(GLOBAL APPEND PROPERTY CUDAQ_EXPORTS ${name})
+  endif()
+endmacro()
 
 # Adds a CUDA Quantum dialect library target for installation. This should normally
 # only be called from add_cudaq_dialect_library().
 function(add_cudaq_library_install name)
-  install(TARGETS ${name} COMPONENT ${name} EXPORT CUDAQTargets)
-  set_property(GLOBAL APPEND PROPERTY CUDAQ_ALL_LIBS ${name})
+  if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+    get_target_export_arg(${name} CUDAQ export_to_cudaq_targets UMBRELLA cudaq-libraries)
+    install(TARGETS ${name}
+      COMPONENT ${name}
+      ${export_to_cudaq_targets}
+      LIBRARY DESTINATION lib${LLVM_LIBDIR_SUFFIX}
+      ARCHIVE DESTINATION lib${LLVM_LIBDIR_SUFFIX}
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+      # Note that CMake will create a directory like:
+      #   objects-${CMAKE_BUILD_TYPE}/obj.LibName
+      # and put object files there.
+      OBJECTS DESTINATION lib${LLVM_LIBDIR_SUFFIX}
+    )
+
+    if (NOT LLVM_ENABLE_IDE)
+      add_llvm_install_targets(install-${name}
+                              DEPENDS ${name}
+                              COMPONENT ${name})
+    endif()
+    set_property(GLOBAL APPEND PROPERTY CUDAQ_ALL_LIBS ${name})
+  endif()   
   set_property(GLOBAL APPEND PROPERTY CUDAQ_EXPORTS ${name})
 endfunction()
 

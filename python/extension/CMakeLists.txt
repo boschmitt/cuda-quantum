@@ -17,6 +17,9 @@ include(AddMLIRPython)
 # top level package (the API has been embedded in a relocatable way).
 add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=cudaq.mlir.")
 
+set(_PYTHON_BUILD_PREFIX "${CUDAQ_BINARY_DIR}/python/cudaq/mlir")
+set(_PYTHON_INSTALL_PREFIX "python_packages/cudaq/mlir")
+
 ################################################################################
 # Sources
 ################################################################################
@@ -104,20 +107,19 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
    MLIRPass
    CUDAQTargetConfigUtil
    cudaq-python-interop
+  PYTHON_BINDINGS_LIBRARY nanobind
 )
 
-target_include_directories(CUDAQuantumPythonSources.Extension INTERFACE 
-    ${CMAKE_SOURCE_DIR}/python 
-    ${CMAKE_SOURCE_DIR}/python/utils
-    ${CMAKE_SOURCE_DIR}/runtime
-)
-target_link_libraries(CUDAQuantumPythonSources.Extension INTERFACE 
-    cudaq 
-    cudaq-common 
-    cudaq-em-default
-    cudaq-em-photonics
-    fmt::fmt-header-only
-    unzip_util
+################################################################################
+# Components
+################################################################################
+
+set(_SOURCE_COMPONENTS
+  CUDAQuantumPythonSources
+
+  # FIXME: We don't need to register everything.
+  MLIRPythonExtension.RegisterEverything
+  MLIRPythonSources.Core
 )
 
 ################################################################################
@@ -126,15 +128,10 @@ target_link_libraries(CUDAQuantumPythonSources.Extension INTERFACE
 
 add_mlir_python_common_capi_library(CUDAQuantumPythonCAPI
   INSTALL_COMPONENT CUDAQuantumPythonModules
-  INSTALL_DESTINATION cudaq/mlir/_mlir_libs
-  OUTPUT_DIRECTORY "${MLIR_BINARY_DIR}/python/cudaq/mlir/_mlir_libs"
+  INSTALL_DESTINATION ${_PYTHON_INSTALL_PREFIX}/_mlir_libs
+  OUTPUT_DIRECTORY "${_PYTHON_BUILD_PREFIX}/_mlir_libs"
   RELATIVE_INSTALL_ROOT "../.."
-  DECLARED_SOURCES
-    CUDAQuantumPythonSources
-    # TODO: Remove this in favor of showing fine grained registration once
-    # available.
-    MLIRPythonExtension.RegisterEverything
-    MLIRPythonSources.Core
+  DECLARED_SOURCES ${_SOURCE_COMPONENTS}
 )
 
 ################################################################################
@@ -142,17 +139,11 @@ add_mlir_python_common_capi_library(CUDAQuantumPythonCAPI
 ################################################################################
 
 add_mlir_python_modules(CUDAQuantumPythonModules
-  ROOT_PREFIX "${MLIR_BINARY_DIR}/python/cudaq/mlir"
-  INSTALL_PREFIX "cudaq/mlir"
-  DECLARED_SOURCES
-    CUDAQuantumPythonSources
-    # TODO: Remove this in favor of showing fine grained registration once
-    # available.
-    MLIRPythonExtension.RegisterEverything
-    MLIRPythonSources
-  COMMON_CAPI_LINK_LIBS
-    CUDAQuantumPythonCAPI
-  )
+  ROOT_PREFIX "${_PYTHON_BUILD_PREFIX}"
+  INSTALL_PREFIX "${_PYTHON_INSTALL_PREFIX}"
+  DECLARED_SOURCES ${_SOURCE_COMPONENTS}
+  COMMON_CAPI_LINK_LIBS CUDAQuantumPythonCAPI
+)
 
 ## The Python bindings module for Quake dialect depends on CUDAQ libraries 
 ## which it can't locate since they are in "../../lib" and the 'rpath' is set

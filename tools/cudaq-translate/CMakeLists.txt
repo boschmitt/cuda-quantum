@@ -6,14 +6,12 @@
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
 
-set(LLVM_LINK_COMPONENTS Support ${LLVM_TARGETS_TO_BUILD})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-type-limits")
 
-add_llvm_executable(cudaq-translate cudaq-translate.cpp)
+add_cudaq_tool(cudaq-translate cudaq-translate.cpp)
 
-llvm_update_compile_flags(cudaq-translate)
 target_link_libraries(cudaq-translate
-  PRIVATE
+  PUBLIC
   MLIRIR
   MLIRParser
   MLIRPass
@@ -24,6 +22,10 @@ target_link_libraries(cudaq-translate
   MLIRTransforms
   MLIRTargetLLVMIRExport
   MLIRLLVMCommonConversion
+  MLIRFuncInlinerExtension
+
+  # Translation libraries.
+  MLIRBuiltinToLLVMIRTranslation
   MLIRLLVMToLLVMIRTranslation
 
   CCDialect
@@ -33,5 +35,3 @@ target_link_libraries(cudaq-translate
 )
 
 mlir_check_all_link_libraries(cudaq-translate)
-
-install(TARGETS cudaq-translate DESTINATION bin)
