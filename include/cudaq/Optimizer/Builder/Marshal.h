@@ -29,8 +29,8 @@ inline bool isCodegenArgumentGather(std::size_t kind) {
 }
 
 inline bool isStateType(mlir::Type ty) {
-  if (auto ptrTy = dyn_cast<cc::PointerType>(ty))
-    return isa<quake::StateType>(ptrTy.getElementType());
+  if (auto ptrTy = mlir::dyn_cast<cc::PointerType>(ty))
+    return mlir::isa<quake::StateType>(ptrTy.getElementType());
   return false;
 }
 
