@@ -19,6 +19,10 @@
 #include <complex>
 #include <vector>
 
+namespace llvm {
+class DataLayout;
+}
+
 namespace quake {
 class StateType;
 }
@@ -34,8 +38,8 @@ class StructType;
 namespace opt {
 
 template <typename T>
-  requires std::integral<T>
-T convertBitsToBytes(T bits) {
+typename std::enable_if<std::is_integral<T>::value, T>::type
+convertBitsToBytes(T bits) {
   return (bits + 7) / 8;
 }
 
@@ -57,26 +61,11 @@ inline mlir::Type getCharType(mlir::MLIRContext *ctx) {
   return mlir::IntegerType::get(ctx, /*bits=*/8);
 }
 
-/// Return the LLVM-IR dialect `ptr` type.
-inline mlir::Type getPointerType(mlir::MLIRContext *ctx) {
-  return mlir::LLVM::LLVMPointerType::get(getCharType(ctx));
-}
-
 /// The type of a dynamic buffer as returned via the runtime.
 cudaq::cc::StructType getDynamicBufferType(mlir::MLIRContext *ctx);
 
 /// Extract the element type of a `sret` return result.
 mlir::Type getSRetElementType(mlir::FunctionType funcTy);
-
-/// Do not use this yet. Opaque pointers are all or nothing.
-inline mlir::Type getOpaquePointerType(mlir::MLIRContext *ctx) {
-  return mlir::LLVM::LLVMPointerType::get(ctx, /*addressSpace=*/0);
-}
-
-/// Return the LLVM-IR dialect type: `ty*`.
-inline mlir::Type getPointerType(mlir::Type ty) {
-  return mlir::LLVM::LLVMPointerType::get(ty);
-}
 
 cudaq::cc::PointerType getIndexedObjectType(mlir::Type eleTy);
 
@@ -116,12 +105,12 @@ inline mlir::Type getStringType(mlir::MLIRContext *ctx, std::size_t length) {
 inline mlir::LLVM::LLVMStructType stdVectorImplType(mlir::Type eleTy) {
   auto *ctx = eleTy.getContext();
   // Map stdvec<complex<T>> to stdvec<struct<T,T>>
-  if (auto cTy = dyn_cast<mlir::ComplexType>(eleTy)) {
+  if (auto cTy = mlir::dyn_cast<mlir::ComplexType>(eleTy)) {
     llvm::SmallVector<mlir::Type> types = {cTy.getElementType(),
                                            cTy.getElementType()};
     eleTy = mlir::LLVM::LLVMStructType::getLiteral(ctx, types);
   }
-  auto elePtrTy = cudaq::opt::factory::getPointerType(eleTy);
+  auto elePtrTy = mlir::LLVM::LLVMPointerType::get(ctx);
   auto i64Ty = mlir::IntegerType::get(ctx, 64);
   llvm::SmallVector<mlir::Type> eleTys = {elePtrTy, i64Ty};
   return mlir::LLVM::LLVMStructType::getLiteral(ctx, eleTys);
@@ -129,7 +118,7 @@ inline mlir::LLVM::LLVMStructType stdVectorImplType(mlir::Type eleTy) {
 
 /// Used to convert `StateType*` to a pointer in LLVM-IR.
 inline mlir::Type stateImplType(mlir::Type eleTy) {
-  return cudaq::opt::factory::getPointerType(eleTy.getContext());
+  return mlir::LLVM::LLVMPointerType::get(eleTy.getContext());
 }
 
 // Generate host side type for std::string. The result is the type of a block of
@@ -166,7 +155,7 @@ inline mlir::Value createFloatConstant(mlir::Location loc,
                                        mlir::OpBuilder &builder,
                                        llvm::APFloat value,
                                        mlir::FloatType type) {
-  return builder.create<mlir::arith::ConstantFloatOp>(loc, value, type);
+  return builder.create<mlir::arith::ConstantFloatOp>(loc, type, value);
 }
 
 inline mlir::Value createFloatConstant(mlir::Location loc,

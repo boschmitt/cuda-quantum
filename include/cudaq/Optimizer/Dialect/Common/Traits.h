@@ -39,7 +39,7 @@ template <typename ConcreteType>
 class Hermitian : public mlir::OpTrait::TraitBase<ConcreteType, Hermitian> {
 public:
   static mlir::LogicalResult verifyTrait(mlir::Operation *op) {
-    if (cast<ConcreteType>(op).isAdj())
+    if (mlir::cast<ConcreteType>(op).isAdj())
       return op->emitOpError("may not be adjoint");
     return mlir::success();
   }

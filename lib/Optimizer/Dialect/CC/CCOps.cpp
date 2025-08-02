@@ -229,34 +229,32 @@ OpFoldResult cudaq::cc::CastOp::fold(FoldAdaptor adaptor) {
 
         if (width == 1) {
           bool v = val != 0;
-          return builder.create<arith::ConstantIntOp>(loc, v, width)
-              .getResult();
+          return arith::ConstantIntOp::create(builder, loc, v, width).getResult();
         }
-        return builder.create<arith::ConstantIntOp>(loc, val, width)
-            .getResult();
+        return arith::ConstantIntOp::create(builder, loc, val, width).getResult();
 
       } else if (ty == fltTy) {
         if (getZint()) {
           val = truncate(val);
           APFloat fval(static_cast<float>(static_cast<std::uint64_t>(val)));
-          return builder.create<arith::ConstantFloatOp>(loc, fval, fltTy)
+          return builder.create<arith::ConstantFloatOp>(loc, fltTy, fval)
               .getResult();
         }
         if (getSint()) {
           APFloat fval(static_cast<float>(val));
-          return builder.create<arith::ConstantFloatOp>(loc, fval, fltTy)
+          return builder.create<arith::ConstantFloatOp>(loc, fltTy, fval)
               .getResult();
         }
       } else if (ty == dblTy) {
         if (getZint()) {
           val = truncate(val);
           APFloat fval(static_cast<double>(static_cast<std::uint64_t>(val)));
-          return builder.create<arith::ConstantFloatOp>(loc, fval, dblTy)
+          return builder.create<arith::ConstantFloatOp>(loc, dblTy, fval)
               .getResult();
         }
         if (getSint()) {
           APFloat fval(static_cast<double>(val));
-          return builder.create<arith::ConstantFloatOp>(loc, fval, dblTy)
+          return builder.create<arith::ConstantFloatOp>(loc, dblTy, fval)
               .getResult();
         }
       }
@@ -271,12 +269,12 @@ OpFoldResult cudaq::cc::CastOp::fold(FoldAdaptor adaptor) {
       if (ty == fltTy) {
         float f = val.convertToDouble();
         APFloat fval(f);
-        return builder.create<arith::ConstantFloatOp>(loc, fval, fltTy)
+        return builder.create<arith::ConstantFloatOp>(loc, fltTy, fval)
             .getResult();
       }
       if (ty == dblTy) {
         APFloat fval{val.convertToDouble()};
-        return builder.create<arith::ConstantFloatOp>(loc, fval, dblTy)
+        return builder.create<arith::ConstantFloatOp>(loc, dblTy, fval)
             .getResult();
       }
       if (isa<IntegerType>(ty)) {
@@ -402,8 +400,6 @@ LogicalResult cudaq::cc::CastOp::verify() {
   } else if (isa<cc::PointerType, LLVM::LLVMPointerType>(inTy) &&
              isa<cc::PointerType, LLVM::LLVMPointerType>(outTy)) {
     // ok, pointer casts: bitcast, nop
-  } else if (isa<cc::PointerType, LLVM::LLVMPointerType>(inTy)) {
-    // ok, will become pointer casts: nop
   } else if (isa<ComplexType>(inTy) && isa<ComplexType>(outTy)) {
     auto inEleTy = cast<ComplexType>(inTy).getElementType();
     auto outEleTy = cast<ComplexType>(outTy).getElementType();
@@ -524,7 +520,7 @@ struct FuseComplexRe : public OpRewritePattern<complex::ReOp> {
     if (comcon) {
       FloatType fltTy = reop.getType();
       APFloat reVal = cast<FloatAttr>(comcon.getValue()[0]).getValue();
-      rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(reop, reVal, fltTy);
+      rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(reop, fltTy, reVal);
       return success();
     }
     return failure();
@@ -539,7 +535,7 @@ struct FuseComplexIm : public OpRewritePattern<complex::ImOp> {
     if (comcon) {
       FloatType fltTy = imop.getType();
       APFloat imVal = cast<FloatAttr>(comcon.getValue()[1]).getValue();
-      rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(imop, imVal, fltTy);
+      rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(imop, fltTy, imVal);
       return success();
     }
     return failure();
@@ -601,7 +597,7 @@ void printInterleavedIndices(OpAsmPrinter &printer, B computePtrOp,
                           if (Value val = dyn_cast<Value>(cst))
                             printer.printOperand(val);
                           else
-                            printer << cst.get<IntegerAttr>().getInt();
+                            printer << cast<IntegerAttr>(cst).getInt();
                         });
 }
 
@@ -688,7 +684,8 @@ void destructureIndices(Type currType, ArrayRef<B> indices,
       dynamicIndices.push_back(val);
     } else {
       rawConstantIndices.push_back(
-          iter.template get<cudaq::cc::InterleavedArgumentConstantIndex>());
+          iter.template dyn_cast<
+              cudaq::cc::InterleavedArgumentConstantIndex>());
     }
 
     currType =
@@ -1071,16 +1068,16 @@ struct FuseWithConstantArray
         if (auto intTy = dyn_cast<IntegerType>(extval.getType())) {
           std::int32_t i = extval.getRawConstantIndices()[0];
           auto cval = cast<IntegerAttr>(conarr.getConstantValues()[i]).getInt();
-          rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(extval, cval,
-                                                            intTy);
+          rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(extval, intTy,
+                                                            cval);
 
           return success();
         }
         if (auto fltTy = dyn_cast<FloatType>(extval.getType())) {
           std::int32_t i = extval.getRawConstantIndices()[0];
           auto cval = cast<FloatAttr>(conarr.getConstantValues()[i]).getValue();
-          rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(extval, cval,
-                                                              fltTy);
+          rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(extval, fltTy,
+                                                              cval);
 
           return success();
         }
@@ -1355,7 +1352,7 @@ struct ForwardStdvecInitSize
               dyn_cast<cudaq::cc::ArrayType>(init.getBuffer().getType()))
         if (!arrTy.isUnknownSize()) {
           rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(
-              size, arrTy.getSize(), ty);
+              size, ty, arrTy.getSize());
           return success();
         }
     }
@@ -1372,9 +1369,6 @@ void cudaq::cc::StdvecSizeOp::getCanonicalizationPatterns(
 //===----------------------------------------------------------------------===//
 // LoopOp
 //===----------------------------------------------------------------------===//
-
-// Override the default.
-Region &cudaq::cc::LoopOp::getLoopBody() { return getBodyRegion(); }
 
 // The basic block of the step region must end in a continue op, which need not
 // be pretty printed if the loop has no block arguments. This ensures the step
@@ -1460,7 +1454,7 @@ LogicalResult cudaq::cc::LoopOp::verify() {
   const auto initArgsSize = getInitialArgs().size();
   if (getResults().size() != initArgsSize)
     return emitOpError("size of init args and outputs must be equal");
-  if (getWhileArguments().size() != initArgsSize)
+  if (getNumWhileArguments() != initArgsSize)
     return emitOpError("size of init args and while region args must be equal");
   if (auto condOp = dyn_cast<ConditionOp>(getWhileBlock()->getTerminator())) {
     if (condOp.getResults().size() != initArgsSize)
@@ -1468,12 +1462,12 @@ LogicalResult cudaq::cc::LoopOp::verify() {
   } else {
     return emitOpError("while region must end with condition op");
   }
-  if (getDoEntryArguments().size() != initArgsSize)
+  if (getNumDoEntryArguments() != initArgsSize)
     return emitOpError("size of init args and body region args must be equal");
   if (hasStep()) {
     if (isPostConditional())
       return emitOpError("post-conditional loop cannot have a step region");
-    if (getStepArguments().size() != initArgsSize)
+    if (getNumStepArguments() != initArgsSize)
       return emitOpError(
           "size of init args and step region args must be equal");
     if (auto contOp = dyn_cast<ContinueOp>(getStepBlock()->getTerminator())) {
@@ -1486,7 +1480,7 @@ LogicalResult cudaq::cc::LoopOp::verify() {
   if (hasPythonElse()) {
     if (isPostConditional())
       return emitOpError("post-conditional loop cannot have an else region");
-    if (getElseEntryArguments().size() != initArgsSize)
+    if (getNumElseEntryArguments() != initArgsSize)
       return emitOpError(
           "size of init args and else region args must be equal");
   }
@@ -1615,69 +1609,57 @@ bool cudaq::cc::LoopOp::hasBreakInBody() {
 }
 
 void cudaq::cc::LoopOp::getSuccessorRegions(
-    std::optional<unsigned> index, ArrayRef<Attribute> operands,
-    SmallVectorImpl<RegionSuccessor> &regions) {
-  if (!index) {
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
+  if (point.isParent()) {
     // loop op, successor is either the WHILE region, or the DO region if loop
     // is post conditional.
     if (isPostConditional())
-      regions.push_back(
-          RegionSuccessor(&getBodyRegion(), getDoEntryArguments()));
+      regions.emplace_back(&getBodyRegion(), getDoEntryArguments());
     else
-      regions.push_back(
-          RegionSuccessor(&getWhileRegion(), getWhileArguments()));
+      regions.emplace_back(&getWhileRegion(), getWhileArguments());
     return;
   }
-  switch (index.value()) {
-  case 0:
-    // WHILE region, successors are the DO region and either the owning loop op
-    // (if no else region is present) or the else region.
-    regions.push_back(RegionSuccessor(&getBodyRegion(), getDoEntryArguments()));
+
+  Region *region = point.getRegionOrNull();
+  assert(region && "must have a region");
+  if (region == &getWhileRegion()) {
+    // WHILE region, successors are the owning loop op and the DO region.
+    regions.emplace_back(&getBodyRegion(), getDoEntryArguments());
     if (hasPythonElse())
-      regions.push_back(
-          RegionSuccessor(&getElseRegion(), getElseEntryArguments()));
+      regions.emplace_back(&getElseRegion(), getElseEntryArguments());
     else
-      regions.push_back(RegionSuccessor(getResults()));
-    break;
-  case 1:
+      regions.emplace_back(getResults());
+  } else if (region == &getBodyRegion()) {
     // DO region, successor is STEP region (2) if present, or WHILE region (0)
     // if STEP is absent.
     if (hasStep())
-      regions.push_back(RegionSuccessor(&getStepRegion(), getStepArguments()));
+      regions.emplace_back(&getStepRegion(), getStepArguments());
     else
-      regions.push_back(
-          RegionSuccessor(&getWhileRegion(), getWhileArguments()));
+      regions.emplace_back(&getWhileRegion(), getWhileArguments());
     // If the body contains a break, then the loop op is also a successor.
     if (hasBreakInBody())
-      regions.push_back(RegionSuccessor(getResults()));
-    break;
-  case 2:
+      regions.emplace_back(getResults());
+  } else if (region == &getStepRegion()) {
     // STEP region, if present, WHILE region is always successor.
     if (hasStep())
-      regions.push_back(
-          RegionSuccessor(&getWhileRegion(), getWhileArguments()));
-    break;
-  case 3:
+      regions.emplace_back(&getWhileRegion(), getWhileArguments());
+  } else if (region == &getElseRegion()) {
     // ELSE region, successors are the owning loop op.
     if (hasPythonElse())
-      regions.push_back(RegionSuccessor(getResults()));
-    break;
+      regions.emplace_back(getResults());
+  } else {
+    emitOpError("unhandled region");
   }
 }
 
 OperandRange
-cudaq::cc::LoopOp::getSuccessorEntryOperands(std::optional<unsigned> index) {
-  assert(index && "invalid index region");
-  switch (*index) {
-  case 0:
-    if (!isPostConditional())
-      return getInitialArgs();
-    break;
-  case 1:
-    if (isPostConditional())
-      return getInitialArgs();
-    break;
-  }
+cudaq::cc::LoopOp::getEntrySuccessorOperands(RegionBranchPoint point) {
+  assert(!point.isParent() && "invalid index region");
+  Region *region = point.getRegionOrNull();
+  if (region == &getWhileRegion() && !isPostConditional())
+    return getInitialArgs();
+  if (region == &getBodyRegion() && isPostConditional())
+    return getInitialArgs();
   return {nullptr, 0};
 }
 
@@ -1790,6 +1772,10 @@ void cudaq::cc::LoopOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<HoistLoopInvariantArgs>(context);
 }
 
+SmallVector<Region *> cudaq::cc::LoopOp::getLoopRegions() {
+  return {&getWhileRegion(), &getBodyRegion(), &getStepRegion()};
+}
+
 //===----------------------------------------------------------------------===//
 // ScopeOp
 //===----------------------------------------------------------------------===//
@@ -1851,13 +1837,12 @@ void cudaq::cc::ScopeOp::getRegionInvocationBounds(
     ArrayRef<Attribute> attrs, SmallVectorImpl<InvocationBounds> &bounds) {}
 
 void cudaq::cc::ScopeOp::getSuccessorRegions(
-    std::optional<unsigned> index, ArrayRef<Attribute> operands,
-    SmallVectorImpl<RegionSuccessor> &regions) {
-  if (!index) {
-    regions.push_back(RegionSuccessor(&getRegion()));
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
+  if (point.isParent()) {
+    regions.emplace_back(&getRegion());
     return;
   }
-  regions.push_back(RegionSuccessor(getResults()));
+  regions.emplace_back(getResults());
 }
 
 // If quantumAllocs, then just look for any allocate memory effect. Otherwise,
@@ -2085,16 +2070,31 @@ void cudaq::cc::IfOp::getRegionInvocationBounds(
 }
 
 void cudaq::cc::IfOp::getSuccessorRegions(
-    std::optional<unsigned> index, ArrayRef<Attribute> operands,
-    SmallVectorImpl<RegionSuccessor> &regions) {
-  if (index) {
-    regions.push_back(RegionSuccessor(getResults()));
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
+  if (point.isParent()) {
+    regions.emplace_back(&getThenRegion());
+    if (!getElseRegion().empty())
+      regions.emplace_back(&getElseRegion());
+  } else {
+    regions.emplace_back(getResults());
+  }
+}
+
+void cudaq::cc::IfOp::getEntrySuccessorRegions(
+    ArrayRef<Attribute> operands, SmallVectorImpl<RegionSuccessor> &regions) {
+  FoldAdaptor adaptor(operands);
+  auto boolAttr = dyn_cast_or_null<BoolAttr>(adaptor.getCondition());
+  if (!boolAttr)
+    return;
+  if (boolAttr.getValue()) {
+    regions.emplace_back(&getThenRegion());
     return;
   }
-  // TODO: can constant fold if the condition is a constant here.
-  regions.push_back(RegionSuccessor(&getThenRegion()));
-  if (!getElseRegion().empty())
-    regions.push_back(RegionSuccessor(&getElseRegion()));
+  if (!getElseRegion().empty()) {
+    regions.emplace_back(&getElseRegion());
+    return;
+  }
+  regions.emplace_back(getResults());
 }
 
 template <typename A>
@@ -2108,7 +2108,7 @@ LogicalResult cudaq::cc::verifyConvergentLinearTypesInRegions(Operation *op) {
   if (!regionOp)
     return failure();
   SmallVector<RegionSuccessor> successors;
-  regionOp.getSuccessorRegions(std::nullopt, {}, successors);
+  regionOp.getSuccessorRegions(RegionBranchPoint::parent(), successors);
   // For each region successor, determine the number of distinct linear-typed
   // definitions in the region.
   long linearMax = -1;
@@ -2210,7 +2210,7 @@ void cudaq::cc::CreateLambdaOp::print(OpAsmPrinter &p) {
   p << ' ';
   bool hasArgs = getRegion().getNumArguments() != 0;
   bool hasRes =
-      getType().cast<cudaq::cc::CallableType>().getSignature().getNumResults();
+      cast<cudaq::cc::CallableType>(getType()).getSignature().getNumResults();
   p.printRegion(getRegion(), /*printEntryBlockArgs=*/hasArgs,
                 /*printBlockTerminators=*/hasRes);
   p << " : " << getType();
@@ -2327,8 +2327,8 @@ LogicalResult cudaq::cc::ConditionOp::verify() {
   return success();
 }
 
-MutableOperandRange cudaq::cc::ConditionOp::getMutableSuccessorOperands(
-    std::optional<unsigned> index) {
+MutableOperandRange
+cudaq::cc::ConditionOp::getMutableSuccessorOperands(RegionBranchPoint point) {
   return getResultsMutable();
 }
 
@@ -2468,8 +2468,8 @@ struct FoldTrivialOffsetOf : public OpRewritePattern<cudaq::cc::OffsetOfOp> {
                                 PatternRewriter &rewriter) const override {
     // If there are no offsets, the offset is 0.
     if (offOp.getConstantIndices().empty()) {
-      rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(offOp, 0,
-                                                        offOp.getType());
+      rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(offOp, offOp.getType(),
+                                                        0);
       return success();
     }
 
@@ -2477,8 +2477,8 @@ struct FoldTrivialOffsetOf : public OpRewritePattern<cudaq::cc::OffsetOfOp> {
     if (std::all_of(offOp.getConstantIndices().begin(),
                     offOp.getConstantIndices().end(),
                     [](std::int32_t i) { return i == 0; })) {
-      rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(offOp, 0,
-                                                        offOp.getType());
+      rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(offOp, offOp.getType(),
+                                                        0);
       return success();
     }
 

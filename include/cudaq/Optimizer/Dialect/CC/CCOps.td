@@ -17,14 +17,14 @@ include "cudaq/Optimizer/Dialect/CC/CCInterfaces.td"
 include "cudaq/Optimizer/Dialect/CC/CCTypes.td"
 include "cudaq/Optimizer/Dialect/Quake/QuakeTypes.td"
 
-def AnyPointerType : Type<CPred<"isa<mlir::LLVM::LLVMPointerType,"
+def AnyPointerType : Type<CPred<"mlir::isa<mlir::LLVM::LLVMPointerType,"
                           "cudaq::cc::PointerType>($_self)">,
                           "any pointer type">;
 
-def AnyCallableType : Type<CPred<"isa<cudaq::cc::CallableType, "
+def AnyCallableType : Type<CPred<"mlir::isa<cudaq::cc::CallableType, "
                           "mlir::FunctionType>($_self)">, "any callable type">;
 
-def AnyAggregateType : Type<CPred<"isa<cudaq::cc::StructType, "
+def AnyAggregateType : Type<CPred<"mlir::isa<cudaq::cc::StructType, "
                             "cudaq::cc::ArrayType, mlir::ComplexType>($_self)">,
                             "any aggregate type">;
 
@@ -42,8 +42,7 @@ class CCOp<string mnemonic, list<Trait> traits = []> :
 def cc_ScopeOp : CCOp<"scope",
         [AutomaticAllocationScope, RecursiveMemoryEffects, NoRegionArguments,
          DeclareOpInterfaceMethods<RegionBranchOpInterface,
-                                   ["getNumRegionInvocations",
-                                    "getRegionInvocationBounds"]>]> {
+           ["getNumRegionInvocations", "getRegionInvocationBounds"]>]> {
   let summary = "A compound statement in which allocations are scoped.";
   let description = [{
     A ScopeOp is used to delineate the scope of local allocations, such as
@@ -307,11 +306,15 @@ def cc_LoopOp : CCOp<"loop",
       return getWhileBlock()->getArguments();
     }
 
+    std::size_t getNumWhileArguments() { return getWhileArguments().size(); }
     mlir::Block *getDoEntryBlock() { return &getBodyRegion().front(); }
     mlir::Block::BlockArgListType getDoEntryArguments() {
       return getDoEntryBlock()->getArguments();
     }
 
+    std::size_t getNumDoEntryArguments() {
+      return getDoEntryArguments().size();
+    }
     bool hasStep() { return !getStepRegion().empty(); }
     mlir::Block *getStepBlock() {
       // The step region is expected to have 0 or 1 block.
@@ -322,6 +325,7 @@ def cc_LoopOp : CCOp<"loop",
         return getStepBlock()->getArguments();
       return {};
     }
+    std::size_t getNumStepArguments() { return getStepArguments().size(); }
 
     bool hasPythonElse() { return !getElseRegion().empty(); }
     mlir::Block *getElseEntryBlock() {
@@ -331,9 +335,11 @@ def cc_LoopOp : CCOp<"loop",
       return hasPythonElse() ? getElseEntryBlock()->getArguments() :
         mlir::Block::BlockArgListType{};
     }
+    std::size_t getNumElseEntryArguments() {
+      return getElseEntryArguments().size();
+    }
 
-    mlir::OperandRange
-    getSuccessorEntryOperands(std::optional<unsigned> index);
+    mlir::OperandRange getEntrySuccessorOperands(mlir::RegionBranchPoint point);
 
     bool hasBreakInBody();
   }];
@@ -345,8 +351,8 @@ def cc_LoopOp : CCOp<"loop",
 
 def cc_IfOp : CCOp<"if",
     [DeclareOpInterfaceMethods<RegionBranchOpInterface,
-                               ["getNumRegionInvocations",
-                                "getRegionInvocationBounds"]>,
+      ["getNumRegionInvocations", "getRegionInvocationBounds",
+       "getEntrySuccessorRegions"]>,
      RecursiveMemoryEffects, LinearTypeArgsTrait]> {
   let summary = "if-then-else operation";
   let description = [{
@@ -568,7 +574,7 @@ def cc_ReturnOp : CCOp<"return", [Pure, ReturnLike, Terminator,
     /// If it is in a region of some other op, returns false.
     bool ownedByFuncOp() {
       if (auto *region = getOperation()->getParentRegion())
-        return isa<mlir::func::FuncOp>(region->getParentOp());
+        return mlir::isa<mlir::func::FuncOp>(region->getParentOp());
       return false;
     }
   }];
@@ -827,7 +833,7 @@ def cc_AllocaOp : CCOp<"alloca", [
 def cc_LoadOp : CCOp<"load",
     [TypesMatchWith<"result type matches element type of pointer value",
         "ptrvalue", "result",
-        "cast<cudaq::cc::PointerType>($_self).getElementType()">]> {
+        "mlir::cast<cudaq::cc::PointerType>($_self).getElementType()">]> {
   let summary = "Load a value from a pointer into a virtual register.";
   let description = [{
     A LoadOp is used to load a value from a memory location, specified by a
@@ -852,7 +858,7 @@ def cc_LoadOp : CCOp<"load",
 def cc_StoreOp : CCOp<"store",
     [TypesMatchWith<"type of value matches element type of pointer",
         "ptrvalue", "value",
-        "cast<cudaq::cc::PointerType>($_self).getElementType()">]> {
+        "mlir::cast<cudaq::cc::PointerType>($_self).getElementType()">]> {
   let summary = "Store a virtual register value to a memory location.";
   let description = [{
     A StoreOp is used to store the value from a virtual register to a memory
@@ -1541,7 +1547,9 @@ def cc_CallCallableOp : CCOp<"call_callable", [CallOpInterface]> {
 
   let arguments = (ins
     AnyCallableType:$callee,
-    Variadic<AnyType>:$args
+    Variadic<AnyType>:$args,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
   let results = (outs Variadic<AnyType>:$results);
   let hasVerifier = 1;
@@ -1550,7 +1558,17 @@ def cc_CallCallableOp : CCOp<"call_callable", [CallOpInterface]> {
     $callee (`,` $args^)? `:` functional-type(operands, results) attr-dict
   }];
 
+  let builders = [
+    OpBuilder<(ins "mlir::TypeRange":$result, "mlir::Value":$callee,
+        "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, result, callee, args, mlir::ArrayAttr{},
+        mlir::ArrayAttr{});
+    }]>
+  ];
+
   let extraClassDeclaration = [{
+    static constexpr mlir::StringRef getCalleeAttrNameStr() { return "callee"; }
+
     /// Get the argument operands to the called function.
     operand_range getArgOperands() {
       return {arg_operand_begin(), arg_operand_end()};
@@ -1559,8 +1577,17 @@ def cc_CallCallableOp : CCOp<"call_callable", [CallOpInterface]> {
     operand_iterator arg_operand_begin() { return ++operand_begin(); }
     operand_iterator arg_operand_end() { return operand_end(); }
 
+    mlir::MutableOperandRange getArgOperandsMutable() {
+      return getArgsMutable();
+    }
+
     /// Return the callee of this operation.
     mlir::CallInterfaceCallable getCallableForCallee() { return getCallee(); }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
+      setOperand(0, mlir::cast<mlir::Value>(callee));
+    }
 
     mlir::FunctionType getFunctionType() {
       return mlir::FunctionType::get(getContext(), getOperands().getType(),
@@ -1583,7 +1610,9 @@ def cc_CallIndirectCallableOp :
 
   let arguments = (ins
     cc_IndirectCallableType:$callee,
-    Variadic<AnyType>:$args
+    Variadic<AnyType>:$args,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
   let results = (outs Variadic<AnyType>:$results);
   let hasVerifier = 1;
@@ -1592,6 +1621,14 @@ def cc_CallIndirectCallableOp :
   let assemblyFormat = [{
     $callee (`,` $args^)? `:` functional-type(operands, results) attr-dict
   }];
+
+  let builders = [
+    OpBuilder<(ins "mlir::TypeRange":$result, "mlir::Value":$callee,
+        "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, result, callee, args, mlir::ArrayAttr{},
+        mlir::ArrayAttr{});
+    }]>
+  ];
 
   let extraClassDeclaration = [{
     /// Get the argument operands to the called function.
@@ -1602,8 +1639,17 @@ def cc_CallIndirectCallableOp :
     operand_iterator arg_operand_begin() { return ++operand_begin(); }
     operand_iterator arg_operand_end() { return operand_end(); }
 
+    mlir::MutableOperandRange getArgOperandsMutable() {
+      return getArgsMutable();
+    }
+
     /// Return the callee of this operation.
     mlir::CallInterfaceCallable getCallableForCallee() { return getCallee(); }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
+      setOperand(0, mlir::cast<mlir::Value>(callee));
+    }
 
     mlir::FunctionType getFunctionType() {
       return mlir::FunctionType::get(getContext(), getOperands().getType(),
@@ -1777,7 +1823,9 @@ def cc_NoInlineCallOp : CCOp<"noinline_call",
 
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$args
+    Variadic<AnyType>:$args,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
   let results = (outs Variadic<AnyType>);
 
@@ -1793,6 +1841,15 @@ def cc_NoInlineCallOp : CCOp<"noinline_call",
     operand_iterator arg_operand_begin() { return operand_begin(); }
     operand_iterator arg_operand_end() { return operand_end(); }
 
+    mlir::MutableOperandRange getArgOperandsMutable() {
+      return getArgsMutable();
+    }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
+      setOperand(0, mlir::cast<mlir::Value>(callee));
+    }
+    
     /// DO NOT RETURN the callee of this operation. This fools the inliner into
     /// not knowing what is actually called.
     mlir::CallInterfaceCallable getCallableForCallee() {
@@ -1818,7 +1875,9 @@ def cc_DeviceCallOp : CCOp<"device_call",
     Variadic<AnySignlessInteger>:$numBlocks,
     Variadic<AnySignlessInteger>:$numThreadsPerBlock,
     Optional<AnySignlessInteger>:$device,
-    Variadic<AnyType>:$args
+    Variadic<AnyType>:$args,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
   let results = (outs Variadic<AnyType>);
   let assemblyFormat = [{
@@ -1833,18 +1892,20 @@ def cc_DeviceCallOp : CCOp<"device_call",
     OpBuilder<(ins "mlir::TypeRange":$resTys, "mlir::StringRef":$callee,
                    "mlir::ValueRange":$values), [{
       return build($_builder, $_state, resTys, callee, mlir::ValueRange{},
-        mlir::ValueRange{},  mlir::Value{}, values);
+        mlir::ValueRange{},  mlir::Value{}, values, mlir::ArrayAttr{},
+        mlir::ArrayAttr{});
     }]>,
     OpBuilder<(ins "mlir::TypeRange":$resTys, "mlir::StringRef":$callee,
                    "mlir::Value":$device, "mlir::ValueRange":$values), [{
       return build($_builder, $_state, resTys, callee, mlir::ValueRange{},
-        mlir::ValueRange{}, device, values);
+        mlir::ValueRange{}, device, values, mlir::ArrayAttr{},
+        mlir::ArrayAttr{});
     }]>,
     OpBuilder<(ins "mlir::TypeRange":$resTys, "mlir::StringRef":$callee,
                    "mlir::ValueRange":$blocks, "mlir::ValueRange":$threads,
                    "mlir::ValueRange":$values), [{
       return build($_builder, $_state, resTys, callee, blocks, threads,
-        mlir::Value{}, values);
+        mlir::Value{}, values, mlir::ArrayAttr{}, mlir::ArrayAttr{});
     }]>
   ];
 
@@ -1855,6 +1916,15 @@ def cc_DeviceCallOp : CCOp<"device_call",
 
     operand_iterator arg_operand_begin() { return operand_begin(); }
     operand_iterator arg_operand_end() { return operand_end(); }
+
+    mlir::MutableOperandRange getArgOperandsMutable() {
+      return getArgsMutable();
+    }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
+      setOperand(0, mlir::cast<mlir::Value>(callee));
+    }
 
     /// Return the callee of this operation.
     mlir::CallInterfaceCallable getCallableForCallee() {
@@ -1900,13 +1970,29 @@ def cc_VarargCallOp :
 
   let arguments = (ins
     FlatSymbolRefAttr:$callee,
-    Variadic<AnyType>:$args
+    Variadic<AnyType>:$args,
+    OptionalAttr<DictArrayAttr>:$arg_attrs,
+    OptionalAttr<DictArrayAttr>:$res_attrs
   );
   let results = (outs Variadic<AnyType>);
 
   let assemblyFormat = [{
     $callee `(` $args `)` `:` functional-type(operands, results) attr-dict
   }];
+
+  let builders = [
+    OpBuilder<(ins "mlir::TypeRange":$result, "mlir::FlatSymbolRefAttr":$callee,
+        "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, result, callee, args, mlir::ArrayAttr{},
+        mlir::ArrayAttr{});
+    }]>,
+    OpBuilder<(ins "mlir::TypeRange":$result, "mlir::StringRef":$callee,
+        "mlir::ValueRange":$args), [{
+      return build($_builder, $_state, result,
+        mlir::FlatSymbolRefAttr::get($_builder.getContext(), callee), args,
+        mlir::ArrayAttr{}, mlir::ArrayAttr{});
+    }]>
+  ];
 
   let extraClassDeclaration = [{
     operand_range getArgOperands() {
@@ -1916,9 +2002,19 @@ def cc_VarargCallOp :
     operand_iterator arg_operand_begin() { return operand_begin(); }
     operand_iterator arg_operand_end() { return operand_end(); }
 
+    mlir::MutableOperandRange getArgOperandsMutable() {
+      return getArgsMutable();
+    }
+
     /// Return the callee of this operation.
     mlir::CallInterfaceCallable getCallableForCallee() {
       return getCalleeAttr();
+    }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
+      (*this)->setAttr(getCalleeAttrName(),
+                       llvm::cast<mlir::SymbolRefAttr>(callee));
     }
 
     mlir::LogicalResult verifySymbolUses(mlir::SymbolTableCollection &);
