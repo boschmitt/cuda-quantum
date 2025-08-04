@@ -114,10 +114,10 @@ public:
             auto val = constantValues[idx];
             if (auto fTy = dyn_cast<FloatType>(eleTy))
               return builder.create<arith::ConstantFloatOp>(
-                  loc, cast<FloatAttr>(val).getValue(), fTy);
+                  loc, fTy, cast<FloatAttr>(val).getValue());
             if (auto iTy = dyn_cast<IntegerType>(eleTy))
               return builder.create<arith::ConstantIntOp>(
-                  loc, cast<IntegerAttr>(val).getInt(), iTy);
+                  loc, iTy, cast<IntegerAttr>(val).getInt());
             auto cTy = cast<ComplexType>(eleTy);
             return builder.create<complex::ConstantOp>(loc, cTy,
                                                        cast<ArrayAttr>(val));

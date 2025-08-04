@@ -49,7 +49,7 @@ public:
     for (auto operand : ret.getOperands())
       genOutputLog(loc, rewriter, operand, std::nullopt);
     auto unitAttr = rewriter.getUnitAttr();
-    rewriter.updateRootInPlace(
+    rewriter.modifyOpInPlace(
         ret, [&]() { ret->setAttr("cc.cudaq.run", unitAttr); });
     return success();
   }

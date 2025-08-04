@@ -52,21 +52,11 @@ public:
   LogicalResult
   matchAndRewrite(cudaq::cc::AllocaOp alloc, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto operands = adaptor.getOperands();
-    auto toTy = LLVM::LLVMPointerType::get([&]() -> Type {
-      if (auto arrTy = dyn_cast<cudaq::cc::ArrayType>(alloc.getElementType());
-          arrTy && arrTy.isUnknownSize())
-        return getTypeConverter()->convertType(arrTy.getElementType());
-      return getTypeConverter()->convertType(alloc.getElementType());
-    }());
-    if (operands.empty()) {
-      rewriter.replaceOpWithNewOp<LLVM::AllocaOp>(
-          alloc, toTy,
-          ArrayRef<Value>{cudaq::opt::factory::genLlvmI32Constant(
-              alloc.getLoc(), rewriter, 1)});
-    } else {
-      rewriter.replaceOpWithNewOp<LLVM::AllocaOp>(alloc, toTy, operands);
-    }
+    Type type = getTypeConverter()->convertType(alloc.getElementType());
+    Value size = adaptor.getSeqSize();
+    if (!size)
+      size = cudaq::opt::factory::genLlvmI32Constant(alloc.getLoc(), rewriter, 1);
+    rewriter.replaceOpWithNewOp<LLVM::AllocaOp>(alloc, getPtrType(), type, size);
     return success();
   }
 };
@@ -86,7 +76,7 @@ public:
       resTy.push_back(getTypeConverter()->convertType(callable.getType(i)));
     auto *ctx = rewriter.getContext();
     auto tupleTy = LLVM::LLVMStructType::getLiteral(ctx, resTy);
-    auto tuplePtrTy = cudaq::opt::factory::getPointerType(tupleTy);
+    auto tuplePtrTy = getPtrType();
     auto structTy = dyn_cast<LLVM::LLVMStructType>(operands[0].getType());
     if (!structTy)
       return failure();
@@ -161,8 +151,9 @@ public:
     auto *thenBlock = rewriter.createBlock(endBlock);
     auto *elseBlock = rewriter.createBlock(endBlock);
     SmallVector<Type> resultTy;
-    auto llvmFuncTy = cast<LLVM::LLVMFunctionType>(
-        cast<LLVM::LLVMPointerType>(funcPtrTy).getElementType());
+    LLVM::LLVMFunctionType llvmFuncTy;
+    // FIXME
+    assert(false);
     if (!isa<LLVM::LLVMVoidType>(llvmFuncTy.getReturnType())) {
       resultTy.push_back(llvmFuncTy.getReturnType());
       endBlock->addArgument(resultTy[0], loc);
@@ -180,7 +171,7 @@ public:
     auto adjustedFuncTy =
         LLVM::LLVMFunctionType::get(llvmFuncTy.getReturnType(), argTys);
     auto adjustedFuncPtr = rewriter.create<LLVM::BitcastOp>(
-        loc, cudaq::opt::factory::getPointerType(adjustedFuncTy), funcPtr);
+        loc, getPtrType(), funcPtr);
     SmallVector<Value> arguments2 = {adjustedFuncPtr};
     arguments2.append(operands.begin(), operands.end());
     auto call2 = rewriter.create<LLVM::CallOp>(loc, resultTy, arguments2);
@@ -203,9 +194,10 @@ public:
     auto funcPtrTy = getTypeConverter()->convertType(
         cast<cudaq::cc::IndirectCallableType>(call.getCallee().getType())
             .getSignature());
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getI8Type());
-    auto funcTy = cast<LLVM::LLVMFunctionType>(
-        cast<LLVM::LLVMPointerType>(funcPtrTy).getElementType());
+    auto ptrTy = getPtrType();
+    LLVM::LLVMFunctionType funcTy;
+    // FIXME
+    assert(false);
     auto i64Ty = rewriter.getI64Type(); // intptr_t
     FlatSymbolRefAttr funSymbol = cudaq::opt::factory::createLLVMFunctionSymbol(
         cudaq::runtime::getLinkableKernelDeviceSide, ptrTy, {i64Ty},
@@ -314,20 +306,20 @@ public:
   LogicalResult
   matchAndRewrite(cudaq::cc::ComputePtrOp cpOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto operands = adaptor.getOperands();
-    auto toTy = getTypeConverter()->convertType(cpOp.getType());
+    Type eleTy = getTypeConverter()->convertType(
+    cast<cudaq::cc::PointerType>(cpOp.getBase().getType()).getElementType());
     // The first operand is the base pointer.
-    Value base = operands[0];
     if (cpOp.llvmNormalForm()) {
       // In this case, the `cc.compute_ptr` has already been converted such that
       // it corresponds 1:1 with the C-like semantics of LLVM's getelementptr
       // operation. Specifically, a pointer to a scalar type is overloaded to
       // possibly be the same as a pointer to an array with unknown bound.
       // All operands except the first are indices.
+      eleTy = cast<cudaq::cc::ArrayType>(eleTy).getElementType();
       auto newOpnds = interleaveConstantsAndOperands(
-          operands.drop_front(), cpOp.getRawConstantIndices());
+          adaptor.getDynamicIndices(), cpOp.getRawConstantIndices());
       // Rewrite the ComputePtrOp as a LLVM::GEPOp.
-      rewriter.replaceOpWithNewOp<LLVM::GEPOp>(cpOp, toTy, base, newOpnds);
+      rewriter.replaceOpWithNewOp<LLVM::GEPOp>(cpOp, getPtrType(), eleTy, adaptor.getBase(), newOpnds);
     } else {
       // If the `cc.compute_ptr` operation has a base argument that is not in
       // LLVM normal form, we implicitly assume that pointer's element type
@@ -340,8 +332,8 @@ public:
       constIndices.append(cpOp.getRawConstantIndices().begin(),
                           cpOp.getRawConstantIndices().end());
       auto newOpnds =
-          interleaveConstantsAndOperands(operands.drop_front(), constIndices);
-      rewriter.replaceOpWithNewOp<LLVM::GEPOp>(cpOp, toTy, base, newOpnds);
+          interleaveConstantsAndOperands(adaptor.getDynamicIndices(), constIndices);
+      rewriter.replaceOpWithNewOp<LLVM::GEPOp>(cpOp, getPtrType(), eleTy, adaptor.getBase(), newOpnds);
     }
     return success();
   }
@@ -456,7 +448,7 @@ public:
     Value tmp;
     auto tupleArgTy = cudaq::opt::lambdaAsPairOfPointers(ctx);
     if (callable.getNoCapture()) {
-      auto zero = cudaq::opt::factory::genLlvmI64Constant(loc, rewriter, 0);
+      Value zero = cudaq::opt::factory::genLlvmI64Constant(loc, rewriter, 0);
       tmp =
           rewriter.create<LLVM::IntToPtrOp>(loc, tupleArgTy.getBody()[1], zero);
     } else {
@@ -469,21 +461,16 @@ public:
                                                         op, offset);
         offsetVal++;
       }
-      auto tuplePtrTy = cudaq::opt::factory::getPointerType(tupleTy);
+      auto tuplePtrTy = getPtrType();
       tmp = cudaq::opt::factory::createLLVMTemporary(loc, rewriter, tuplePtrTy);
       rewriter.create<LLVM::StoreOp>(loc, tupleVal, tmp);
     }
     Value tupleArg = rewriter.create<LLVM::UndefOp>(loc, tupleArgTy);
     auto module = callable->getParentOfType<ModuleOp>();
     auto *calledFuncOp = module.lookupSymbol(callable.getCallee());
-    auto sigTy = [&]() -> Type {
-      if (auto calledFunc = dyn_cast<func::FuncOp>(calledFuncOp))
-        return getTypeConverter()->convertType(calledFunc.getFunctionType());
-      return cudaq::opt::factory::getPointerType(
-          cast<LLVM::LLVMFuncOp>(calledFuncOp).getFunctionType());
-    }();
+    auto sigTy = getPtrType();
     auto tramp = rewriter.create<LLVM::AddressOfOp>(
-        loc, sigTy, callable.getCallee().cast<FlatSymbolRefAttr>());
+        loc, sigTy, cast<FlatSymbolRefAttr>(callable.getCallee()));
     auto trampoline =
         rewriter.create<LLVM::BitcastOp>(loc, tupleArgTy.getBody()[0], tramp);
     auto zeroA = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{0});
@@ -618,10 +605,10 @@ public:
                                                        one);
     } else {
       std::int64_t arrSize =
-          llvm::cast<LLVM::LLVMArrayType>(
-              llvm::cast<LLVM::LLVMPointerType>(operands[0].getType())
+          llvm::cast<cudaq::cc::ArrayType>(
+              llvm::cast<cudaq::cc::PointerType>(init.getBuffer().getType())
                   .getElementType())
-              .getNumElements();
+              .getSize();
       auto i64Ty = rewriter.getI64Type();
       Value len = rewriter.create<LLVM::ConstantOp>(
           loc, i64Ty, IntegerAttr::get(i64Ty, arrSize));
@@ -678,7 +665,7 @@ public:
     // Get the string address
     rewriter.replaceOpWithNewOp<LLVM::AddressOfOp>(
         stringLiteralOp,
-        cudaq::opt::factory::getPointerType(slGlobal.getType()),
+        getPtrType(),
         slGlobal.getSymName());
 
     return success();

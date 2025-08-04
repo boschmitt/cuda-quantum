@@ -32,8 +32,8 @@ public:
   LogicalResult matchAndRewrite(LLVM::CallOp call,
                                 PatternRewriter &rewriter) const override {
     if (auto callee = call.getCallee()) {
-      if (callee->equals(cudaq::opt::QIRMeasureBody) ||
-          callee->equals(cudaq::opt::QIRRecordOutput)) {
+      if (callee == cudaq::opt::QIRMeasureBody ||
+          callee == cudaq::opt::QIRRecordOutput) {
         rewriter.eraseOp(call);
         return success();
       }

@@ -13,6 +13,7 @@
 #include "cudaq/Optimizer/Dialect/CC/CCOps.h"
 #include "cudaq/Optimizer/Dialect/CC/CCTypes.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeTypes.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
@@ -36,7 +37,7 @@ namespace cudaq::opt {
 using namespace mlir;
 
 LLVM::LLVMStructType cudaq::opt::lambdaAsPairOfPointers(MLIRContext *context) {
-  auto ptrTy = cudaq::opt::factory::getPointerType(context);
+  auto ptrTy = LLVM::LLVMPointerType::get(context);
   SmallVector<Type> pairOfPointers = {ptrTy, ptrTy};
   return LLVM::LLVMStructType::getLiteral(context, pairOfPointers);
 }
@@ -53,18 +54,7 @@ void cudaq::opt::populateCCTypeConversions(LLVMTypeConverter *converter) {
     return factory::stdVectorImplType(eleTy);
   });
   converter->addConversion([converter](cc::PointerType type) {
-    auto eleTy = type.getElementType();
-    if (isa<NoneType>(eleTy))
-      return factory::getPointerType(type.getContext());
-    eleTy = converter->convertType(eleTy);
-    if (auto arrTy = dyn_cast<cc::ArrayType>(eleTy)) {
-      // If array has a static size, it becomes an LLVMArrayType. Otherwise, we
-      // end up here.
-      assert(arrTy.isUnknownSize());
-      return factory::getPointerType(
-          converter->convertType(arrTy.getElementType()));
-    }
-    return factory::getPointerType(eleTy);
+    return LLVM::LLVMPointerType::get(type.getContext());
   });
   converter->addConversion([converter](cc::ArrayType type) -> Type {
     auto eleTy = converter->convertType(type.getElementType());

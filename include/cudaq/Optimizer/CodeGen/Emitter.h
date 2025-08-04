@@ -29,8 +29,8 @@ inline std::optional<int64_t> getIndexValueAsInt(mlir::Value value) {
   // The value might not have an defining operation, e.g., when the value is an
   // circuit argument
   if (auto constOp =
-          dyn_cast_if_present<mlir::arith::ConstantOp>(value.getDefiningOp())) {
-    if (auto index = dyn_cast<mlir::IntegerAttr>(constOp.getValue())) {
+          mlir::dyn_cast_if_present<mlir::arith::ConstantOp>(value.getDefiningOp())) {
+    if (auto index = mlir::dyn_cast<mlir::IntegerAttr>(constOp.getValue())) {
       return index.getInt();
     }
   }
@@ -42,8 +42,8 @@ inline std::optional<double> getParameterValueAsDouble(mlir::Value value) {
   // The value might not have an defining operation, e.g., when the value is an
   // circuit argument.
   if (auto constOp =
-          dyn_cast_if_present<mlir::arith::ConstantOp>(value.getDefiningOp())) {
-    if (auto index = dyn_cast<mlir::FloatAttr>(constOp.getValue())) {
+          mlir::dyn_cast_if_present<mlir::arith::ConstantOp>(value.getDefiningOp())) {
+    if (auto index = mlir::dyn_cast<mlir::FloatAttr>(constOp.getValue())) {
       return index.getValueAsDouble();
     }
   }
