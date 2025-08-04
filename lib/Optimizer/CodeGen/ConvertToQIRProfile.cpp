@@ -275,8 +275,8 @@ struct AddFuncAttribute : public OpRewritePattern<LLVM::LLVMFuncOp> {
       if (isAdaptive)
         builder.setInsertionPointAfter(
             info.resultOperation.find(iv.first)->getSecond());
-      Value idx = builder.create<LLVM::ConstantOp>(loc, i64Ty, iv.first);
-      Value ptr = builder.create<LLVM::IntToPtrOp>(loc, resultTy, idx);
+      Value idx = LLVM::ConstantOp::create(rewriter, loc, i64Ty, iv.first);
+      Value ptr = LLVM::IntToPtrOp::create(rewriter, loc, resultTy, idx);
       auto regName = [&]() -> Value {
         auto charPtrTy = cudaq::opt::getCharPointerType(builder.getContext());
         if (!rec.second.empty()) {
@@ -285,15 +285,15 @@ struct AddFuncAttribute : public OpRewritePattern<LLVM::LLVMFuncOp> {
           // module.
           auto globl =
               builder.genCStringLiteralAppendNul(loc, module, rec.second);
-          auto addrOf = builder.create<LLVM::AddressOfOp>(
+          auto addrOf = LLVM::AddressOfOp::create(rewriter,
               loc, LLVM::LLVMPointerType::get(builder.getContext()),
               globl.getName());
-          return builder.create<LLVM::BitcastOp>(loc, charPtrTy, addrOf);
+          return LLVM::BitcastOp::create(rewriter, loc, charPtrTy, addrOf);
         }
-        Value zero = builder.create<LLVM::ConstantOp>(loc, i64Ty, 0);
-        return builder.create<LLVM::IntToPtrOp>(loc, charPtrTy, zero);
+        Value zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty, 0);
+        return LLVM::IntToPtrOp::create(rewriter, loc, charPtrTy, zero);
       }();
-      builder.create<LLVM::CallOp>(loc, TypeRange{},
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
                                    cudaq::opt::QIRRecordOutput,
                                    ValueRange{ptr, regName});
     }
@@ -406,10 +406,10 @@ struct ArrayGetElementPtrConv : public OpRewritePattern<LLVM::LoadOp> {
       if (!alloc->hasAttr(cudaq::opt::StartingOffsetAttrName))
         return failure();
       Value disp = call.getOperand(1);
-      Value off = rewriter.create<LLVM::ConstantOp>(
-          loc, disp.getType(),
+      Value off = LLVM::ConstantOp::create(
+          rewriter, loc, disp.getType(),
           alloc->getAttr(cudaq::opt::StartingOffsetAttrName));
-      Value qubit = rewriter.create<LLVM::AddOp>(loc, off, disp);
+      Value qubit = LLVM::AddOp::create(rewriter, loc, off, disp);
       rewriter.replaceOpWithNewOp<LLVM::IntToPtrOp>(op, op.getType(), qubit);
       return success();
     }
@@ -427,7 +427,7 @@ struct CallAlloc : public OpRewritePattern<LLVM::CallOp> {
     if (!call->hasAttr(cudaq::opt::StartingOffsetAttrName))
       return failure();
     auto loc = call.getLoc();
-    Value qubit = rewriter.create<LLVM::ConstantOp>(
+    Value qubit = LLVM::ConstantOp::create(rewriter,
         loc, rewriter.getI64Type(),
         call->getAttr(cudaq::opt::StartingOffsetAttrName));
     auto resTy = call.getResult().getType();

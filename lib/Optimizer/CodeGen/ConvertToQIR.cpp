@@ -113,18 +113,15 @@ public:
           auto v = [&]() -> Value {
             auto val = constantValues[idx];
             if (auto fTy = dyn_cast<FloatType>(eleTy))
-              return builder.create<arith::ConstantFloatOp>(
-                  loc, fTy, cast<FloatAttr>(val).getValue());
+              return arith::ConstantFloatOp::create(builder, loc, fTy, cast<FloatAttr>(val).getValue());
             if (auto iTy = dyn_cast<IntegerType>(eleTy))
-              return builder.create<arith::ConstantIntOp>(
-                  loc, iTy, cast<IntegerAttr>(val).getInt());
+              return arith::ConstantIntOp::create(builder, loc, iTy, cast<IntegerAttr>(val).getInt());
             auto cTy = cast<ComplexType>(eleTy);
-            return builder.create<complex::ConstantOp>(loc, cTy,
+            return complex::ConstantOp::create(builder, loc, cTy,
                                                        cast<ArrayAttr>(val));
           }();
-          Value arrWithOffset = builder.create<cudaq::cc::ComputePtrOp>(
-              loc, ptrTy, buffer, ArrayRef<cudaq::cc::ComputePtrArg>{idx});
-          builder.create<cudaq::cc::StoreOp>(loc, v, arrWithOffset);
+          Value arrWithOffset = cudaq::cc::ComputePtrOp::create(builder, loc, ptrTy, buffer, ArrayRef<cudaq::cc::ComputePtrArg>{idx});
+          cudaq::cc::StoreOp::create(builder, loc, v, arrWithOffset);
         }
         cleanUps.push_back(user);
       }

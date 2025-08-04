@@ -81,9 +81,8 @@ public:
     if (!structTy)
       return failure();
     auto one = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{1});
-    auto extract = rewriter.create<LLVM::ExtractValueOp>(
-        loc, structTy.getBody()[1], operands[0], one);
-    auto tupleVal = rewriter.create<LLVM::BitcastOp>(loc, tuplePtrTy, extract);
+    auto extract = LLVM::ExtractValueOp::create(rewriter, loc, structTy.getBody()[1], operands[0], one);
+    auto tupleVal = LLVM::BitcastOp::create(rewriter, loc, tuplePtrTy, extract);
     rewriter.replaceOpWithNewOp<LLVM::LoadOp>(callable, tupleTy, tupleVal);
     return success();
   }
@@ -105,8 +104,7 @@ public:
       return failure();
     auto *ctx = rewriter.getContext();
     auto zero = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{0});
-    auto extract = rewriter.create<LLVM::ExtractValueOp>(
-        loc, structTy.getBody()[0], operands[0], zero);
+    auto extract = LLVM::ExtractValueOp::create(rewriter, loc, structTy.getBody()[0], operands[0], zero);
     rewriter.replaceOpWithNewOp<LLVM::BitcastOp>(callable, resTy, extract);
     return success();
   }
@@ -132,18 +130,18 @@ public:
     auto ptr0Ty = structTy.getBody()[0];
     auto zero = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{0});
     auto rawFuncPtr =
-        rewriter.create<LLVM::ExtractValueOp>(loc, ptr0Ty, operands[0], zero);
+        LLVM::ExtractValueOp::create(rewriter, loc, ptr0Ty, operands[0], zero);
     auto ptr1Ty = structTy.getBody()[1];
     auto one = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{1});
     auto rawTuplePtr =
-        rewriter.create<LLVM::ExtractValueOp>(loc, ptr1Ty, operands[0], one);
+        LLVM::ExtractValueOp::create(rewriter, loc, ptr1Ty, operands[0], one);
     Type funcPtrTy = getTypeConverter()->convertType(calleeFuncTy);
-    auto funcPtr = rewriter.create<LLVM::BitcastOp>(loc, funcPtrTy, rawFuncPtr);
+    auto funcPtr = LLVM::BitcastOp::create(rewriter, loc, funcPtrTy, rawFuncPtr);
     auto i64Ty = rewriter.getI64Type();
     auto zeroI64 = cudaq::opt::factory::genLlvmI64Constant(loc, rewriter, 0);
     auto rawTupleVal =
-        rewriter.create<LLVM::PtrToIntOp>(loc, i64Ty, rawTuplePtr);
-    auto isNullptr = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq,
+        LLVM::PtrToIntOp::create(rewriter, loc, i64Ty, rawTuplePtr);
+    auto isNullptr = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::eq,
                                                    rawTupleVal, zeroI64);
     auto *initBlock = rewriter.getInsertionBlock();
     auto initPos = rewriter.getInsertionPoint();
@@ -159,23 +157,22 @@ public:
       endBlock->addArgument(resultTy[0], loc);
     }
     rewriter.setInsertionPointToEnd(initBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, isNullptr, thenBlock, elseBlock);
+    LLVM::CondBrOp::create(rewriter, loc, isNullptr, thenBlock, elseBlock);
     rewriter.setInsertionPointToEnd(thenBlock);
     SmallVector<Value> arguments1 = {funcPtr};
     arguments1.append(operands.begin() + 1, operands.end());
-    auto call1 = rewriter.create<LLVM::CallOp>(loc, resultTy, arguments1);
-    rewriter.create<LLVM::BrOp>(loc, call1.getResults(), endBlock);
+    auto call1 = LLVM::CallOp::create(rewriter, loc, resultTy, arguments1);
+    LLVM::BrOp::create(rewriter, loc, call1.getResults(), endBlock);
     rewriter.setInsertionPointToEnd(elseBlock);
     SmallVector<Type> argTys(operands.getTypes().begin(),
                              operands.getTypes().end());
     auto adjustedFuncTy =
         LLVM::LLVMFunctionType::get(llvmFuncTy.getReturnType(), argTys);
-    auto adjustedFuncPtr = rewriter.create<LLVM::BitcastOp>(
-        loc, getPtrType(), funcPtr);
+    auto adjustedFuncPtr = LLVM::BitcastOp::create(rewriter, loc, getPtrType(), funcPtr);
     SmallVector<Value> arguments2 = {adjustedFuncPtr};
     arguments2.append(operands.begin(), operands.end());
-    auto call2 = rewriter.create<LLVM::CallOp>(loc, resultTy, arguments2);
-    rewriter.create<LLVM::BrOp>(loc, call2.getResults(), endBlock);
+    auto call2 = LLVM::CallOp::create(rewriter, loc, resultTy, arguments2);
+    LLVM::BrOp::create(rewriter, loc, call2.getResults(), endBlock);
     rewriter.replaceOp(call, endBlock->getArguments());
     return success();
   }
@@ -209,10 +206,9 @@ public:
     // device-side functions are located in the same address space as well. None
     // of these functions should be expected to reside on remote hardware.
     // Therefore, this will likely only be useful in a simulation target.
-    auto lookee = rewriter.create<LLVM::CallOp>(
-        loc, ptrTy, funSymbol, ValueRange{adaptor.getCallee()});
+    auto lookee = LLVM::CallOp::create(rewriter, loc, ptrTy, funSymbol, ValueRange{adaptor.getCallee()});
     auto lookup =
-        rewriter.create<LLVM::BitcastOp>(loc, funcPtrTy, lookee.getResult());
+        LLVM::BitcastOp::create(rewriter, loc, funcPtrTy, lookee.getResult());
 
     // Call the function that was just found in the map.
     SmallVector<Value> args = {lookup.getResult()};
@@ -407,7 +403,7 @@ public:
     auto name = global.getSymName();
     bool isReadOnly = global.getConstant();
     Attribute initializer = global.getValue().value_or(Attribute{});
-    rewriter.create<mlir::LLVM::GlobalOp>(loc, type, isReadOnly,
+    mlir::LLVM::GlobalOp::create(rewriter, loc, type, isReadOnly,
                                           LLVM::Linkage::Private, name,
                                           initializer, /*alignment=*/0);
     rewriter.eraseOp(global);
@@ -450,34 +446,33 @@ public:
     if (callable.getNoCapture()) {
       Value zero = cudaq::opt::factory::genLlvmI64Constant(loc, rewriter, 0);
       tmp =
-          rewriter.create<LLVM::IntToPtrOp>(loc, tupleArgTy.getBody()[1], zero);
+          LLVM::IntToPtrOp::create(rewriter, loc, tupleArgTy.getBody()[1], zero);
     } else {
-      Value tupleVal = rewriter.create<LLVM::UndefOp>(loc, tupleTy);
+      Value tupleVal = LLVM::UndefOp::create(rewriter, loc, tupleTy);
       std::int64_t offsetVal = 0;
       for (auto op : operands) {
         auto offset =
             DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{offsetVal});
-        tupleVal = rewriter.create<LLVM::InsertValueOp>(loc, tupleTy, tupleVal,
+        tupleVal = LLVM::InsertValueOp::create(rewriter, loc, tupleTy, tupleVal,
                                                         op, offset);
         offsetVal++;
       }
       auto tuplePtrTy = getPtrType();
       tmp = cudaq::opt::factory::createLLVMTemporary(loc, rewriter, tuplePtrTy);
-      rewriter.create<LLVM::StoreOp>(loc, tupleVal, tmp);
+      LLVM::StoreOp::create(rewriter, loc, tupleVal, tmp);
     }
-    Value tupleArg = rewriter.create<LLVM::UndefOp>(loc, tupleArgTy);
+    Value tupleArg = LLVM::UndefOp::create(rewriter, loc, tupleArgTy);
     auto module = callable->getParentOfType<ModuleOp>();
     auto *calledFuncOp = module.lookupSymbol(callable.getCallee());
     auto sigTy = getPtrType();
-    auto tramp = rewriter.create<LLVM::AddressOfOp>(
-        loc, sigTy, cast<FlatSymbolRefAttr>(callable.getCallee()));
+    auto tramp = LLVM::AddressOfOp::create(rewriter, loc, sigTy, cast<FlatSymbolRefAttr>(callable.getCallee()));
     auto trampoline =
-        rewriter.create<LLVM::BitcastOp>(loc, tupleArgTy.getBody()[0], tramp);
+        LLVM::BitcastOp::create(rewriter, loc, tupleArgTy.getBody()[0], tramp);
     auto zeroA = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{0});
-    tupleArg = rewriter.create<LLVM::InsertValueOp>(loc, tupleArgTy, tupleArg,
+    tupleArg = LLVM::InsertValueOp::create(rewriter, loc, tupleArgTy, tupleArg,
                                                     trampoline, zeroA);
     auto castTmp =
-        rewriter.create<LLVM::BitcastOp>(loc, tupleArgTy.getBody()[1], tmp);
+        LLVM::BitcastOp::create(rewriter, loc, tupleArgTy.getBody()[1], tmp);
     rewriter.replaceOpWithNewOp<LLVM::InsertValueOp>(
         callable, tupleArgTy, tupleArg, castTmp,
         DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{1}));
@@ -519,12 +514,11 @@ public:
     auto loc = sizeOfOp.getLoc();
     // TODO: replace this with some target-specific memory layout computation
     // when we upgrade to a newer MLIR.
-    auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 64);
+    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, 64);
     auto ptrTy =
         cudaq::cc::PointerType::get(cudaq::cc::ArrayType::get(inputTy));
-    auto nullCast = rewriter.create<cudaq::cc::CastOp>(loc, ptrTy, zero);
-    Value nextPtr = rewriter.create<cudaq::cc::ComputePtrOp>(
-        loc, ptrTy, nullCast, ArrayRef<cudaq::cc::ComputePtrArg>{1});
+    auto nullCast = cudaq::cc::CastOp::create(rewriter, loc, ptrTy, zero);
+    Value nextPtr = cudaq::cc::ComputePtrOp::create(rewriter, loc, ptrTy, nullCast, ArrayRef<cudaq::cc::ComputePtrArg>{1});
     rewriter.replaceOpWithNewOp<cudaq::cc::CastOp>(sizeOfOp, resultTy, nextPtr);
     return success();
   }
@@ -547,11 +541,10 @@ public:
     auto loc = offsetOp.getLoc();
     // TODO: replace this with some target-specific memory layout computation
     // when we upgrade to a newer MLIR.
-    auto zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 64);
+    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, 64);
     auto ptrTy = cudaq::cc::PointerType::get(inputTy);
-    auto nul = rewriter.create<cudaq::cc::CastOp>(loc, ptrTy, zero);
-    Value nextPtr =
-        rewriter.create<cudaq::cc::ComputePtrOp>(loc, ptrTy, nul, args);
+    auto nul = cudaq::cc::CastOp::create(rewriter, loc, ptrTy, zero);
+    Value nextPtr = cudaq::cc::ComputePtrOp::create(rewriter, loc, ptrTy, nul, args);
     rewriter.replaceOpWithNewOp<cudaq::cc::CastOp>(offsetOp, resultTy, nextPtr);
     return success();
   }
@@ -572,8 +565,7 @@ public:
     auto structTy = dyn_cast<LLVM::LLVMStructType>(operands[0].getType());
     if (!structTy)
       return data.emitError("stdvec_data must have a struct as argument.");
-    auto extract = rewriter.create<LLVM::ExtractValueOp>(
-        data.getLoc(), structTy.getBody()[0], operands[0], zero);
+    auto extract = LLVM::ExtractValueOp::create(rewriter, data.getLoc(), structTy.getBody()[0], operands[0], zero);
     rewriter.replaceOpWithNewOp<LLVM::BitcastOp>(data, resTy, extract);
     return success();
   }
@@ -592,13 +584,13 @@ public:
     auto ctx = init.getContext();
     auto zero = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{0});
     auto loc = init.getLoc();
-    Value val = rewriter.create<LLVM::UndefOp>(loc, resTy);
+    Value val = LLVM::UndefOp::create(rewriter, loc, resTy);
     auto structTy = dyn_cast<LLVM::LLVMStructType>(resTy);
     if (!structTy)
       return init.emitError("stdvec_init must have a struct as argument.");
-    auto cast = rewriter.create<LLVM::BitcastOp>(loc, structTy.getBody()[0],
+    auto cast = LLVM::BitcastOp::create(rewriter, loc, structTy.getBody()[0],
                                                  operands[0]);
-    val = rewriter.create<LLVM::InsertValueOp>(loc, val, cast, zero);
+    val = LLVM::InsertValueOp::create(rewriter, loc, val, cast, zero);
     auto one = DenseI64ArrayAttr::get(ctx, ArrayRef<std::int64_t>{1});
     if (operands.size() == 2) {
       rewriter.replaceOpWithNewOp<LLVM::InsertValueOp>(init, val, operands[1],
@@ -610,7 +602,7 @@ public:
                   .getElementType())
               .getSize();
       auto i64Ty = rewriter.getI64Type();
-      Value len = rewriter.create<LLVM::ConstantOp>(
+      Value len = LLVM::ConstantOp::create(rewriter,
           loc, i64Ty, IntegerAttr::get(i64Ty, arrSize));
       rewriter.replaceOpWithNewOp<LLVM::InsertValueOp>(init, val, len, one);
     }
