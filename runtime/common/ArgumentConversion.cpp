@@ -15,6 +15,7 @@
 #include "cudaq/qis/pauli_word.h"
 #include "cudaq/utils/registry.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/DataLayout.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Complex/IR/Complex.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -45,11 +46,11 @@ static Value genConstant(OpBuilder &builder, std::int64_t v) {
 
 static Value genConstant(OpBuilder &builder, float v) {
   return builder.create<arith::ConstantFloatOp>(
-      builder.getUnknownLoc(), APFloat{v}, builder.getF32Type());
+      builder.getUnknownLoc(), builder.getF32Type(), APFloat{v});
 }
 static Value genConstant(OpBuilder &builder, double v) {
   return builder.create<arith::ConstantFloatOp>(
-      builder.getUnknownLoc(), APFloat{v}, builder.getF64Type());
+      builder.getUnknownLoc(), builder.getF64Type(), APFloat{v});
 }
 
 template <typename A>
@@ -71,8 +72,8 @@ static Value genConstant(OpBuilder &builder, std::complex<double> v) {
 }
 static Value genConstant(OpBuilder &builder, FloatType fltTy, long double *v) {
   return builder.create<arith::ConstantFloatOp>(
-      builder.getUnknownLoc(),
-      APFloat{fltTy.getFloatSemantics(), std::to_string(*v)}, fltTy);
+      builder.getUnknownLoc(), fltTy,
+      APFloat{fltTy.getFloatSemantics(), std::to_string(*v)});
 }
 
 static Value genConstant(OpBuilder &builder, const std::string &v,
@@ -184,7 +185,7 @@ static void createInitFunc(OpBuilder &builder, ModuleOp moduleOp,
           arg = initFunc.getArgument(argPos);
         }
 
-        auto allocSize = alloc.getSize();
+        Value allocSize = alloc.getSize();
         if (!allocSize)
           allocSize = newBuilder.create<arith::ConstantIntOp>(
               loc, quake::getAllocationSize(alloc.getType()), 64);
@@ -265,7 +266,7 @@ static void createNumQubitsFunc(OpBuilder &builder, ModuleOp moduleOp,
 
   auto *entryBlock = &numQubitsFunc.getRegion().front();
   newBuilder.setInsertionPointToStart(entryBlock);
-  Value size = newBuilder.create<arith::ConstantIntOp>(loc, 0, retType);
+  Value size = newBuilder.create<arith::ConstantIntOp>(loc, retType, 0);
 
   // Process block recursively to calculate and return allocation size
   // and remove everything else.
@@ -276,7 +277,7 @@ static void createNumQubitsFunc(OpBuilder &builder, ModuleOp moduleOp,
     for (auto &op : block) {
       // Calculate allocation size (existing allocation size plus new one)
       if (auto alloc = dyn_cast<quake::AllocaOp>(&op)) {
-        auto allocSize = alloc.getSize();
+        Value allocSize = alloc.getSize();
         if (!allocSize)
           allocSize = newBuilder.create<arith::ConstantIntOp>(
               loc, quake::getAllocationSize(alloc.getType()), 64);

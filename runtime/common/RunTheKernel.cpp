@@ -18,6 +18,7 @@
 #include "cudaq/simulators.h"
 #include "nvqir/CircuitSimulator.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/LLVMContext.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"

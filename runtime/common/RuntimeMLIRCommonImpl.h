@@ -27,13 +27,12 @@
 #include "cudaq/Optimizer/Transforms/Passes.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Base64.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/TargetParser/Host.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/InitAllDialects.h"
@@ -56,13 +55,11 @@ bool setupTargetTriple(llvm::Module *llvmModule) {
   if (!target)
     return false;
 
-  std::string cpu(llvm::sys::getHostCPUName());
+  std::string cpu(llvm::sys::getHostCPUName().str());
   llvm::SubtargetFeatures features;
-  llvm::StringMap<bool> hostFeatures;
-
-  if (llvm::sys::getHostCPUFeatures(hostFeatures))
-    for (auto &f : hostFeatures)
-      features.AddFeature(f.first(), f.second);
+  llvm::StringMap<bool> hostFeatures = llvm::sys::getHostCPUFeatures();
+  for (auto &f : hostFeatures)
+    features.AddFeature(f.first(), f.second);
 
   std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
       targetTriple, cpu, features.getString(), {}, {}));
@@ -70,7 +67,7 @@ bool setupTargetTriple(llvm::Module *llvmModule) {
     return false;
 
   llvmModule->setDataLayout(machine->createDataLayout());
-  llvmModule->setTargetTriple(targetTriple);
+  llvmModule->setTargetTriple(machine->getTargetTriple());
 
   return true;
 }
@@ -159,8 +156,7 @@ mlir::LogicalResult verifyOutputCalls(llvm::CallBase *callInst,
     auto myArg = arg->getType();
     auto ptrTy = dyn_cast_or_null<llvm::PointerType>(myArg);
     // If we're dealing with the i8* parameters
-    if (ptrTy != nullptr &&
-        ptrTy->getNonOpaquePointerElementType()->isIntegerTy(8)) {
+    if (ptrTy != nullptr) {
       // Verify that it has the nonnull attribute
       if (!callInst->paramHasAttr(iArg, llvm::Attribute::NonNull)) {
         llvm::errs() << "error - nonnull attribute is missing from i8* "
@@ -459,7 +455,6 @@ qirProfileTranslationFunction(const char *qirProfile, mlir::Operation *op,
   timingScope.stop();
 
   auto llvmContext = std::make_unique<llvm::LLVMContext>();
-  llvmContext->setOpaquePointers(false);
   auto llvmModule = translateModuleToLLVMIR(op, *llvmContext);
 
   // Apply required attributes for the Base Profile
@@ -725,14 +720,13 @@ mlir::ExecutionEngine *createQIRJITEngine(mlir::ModuleOp &moduleOp,
 
   mlir::ExecutionEngineOptions opts;
   opts.transformer = [](llvm::Module *m) { return llvm::ErrorSuccess(); };
-  opts.jitCodeGenOptLevel = llvm::CodeGenOpt::None;
+  opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::None;
   opts.llvmModuleBuilder =
       [convertTo = convertTo.str()](
           mlir::Operation *module,
           llvm::LLVMContext &llvmContext) -> std::unique_ptr<llvm::Module> {
     ScopedTraceWithContext(cudaq::TIMING_JIT,
                            "createQIRJITEngine::llvmModuleBuilder");
-    llvmContext.setOpaquePointers(false);
 
     auto *context = module->getContext();
     mlir::PassManager pm(context);
@@ -783,7 +777,19 @@ mlir::ExecutionEngine *createQIRJITEngine(mlir::ModuleOp &moduleOp,
       throw std::runtime_error(
           "[createQIRJITEngine] Lowering to LLVM IR failed.");
 
-    mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
+    // Create target machine and configure the LLVM Module
+    auto tmBuilderOrError = llvm::orc::JITTargetMachineBuilder::detectHost();
+    if (!tmBuilderOrError) {
+      llvm::errs() << "Could not create JITTargetMachineBuilder\n";
+      return nullptr;
+    }
+    auto tmOrError = tmBuilderOrError->createTargetMachine();
+    if (!tmOrError) {
+      llvm::errs() << "Could not create TargetMachine\n";
+      return nullptr;
+    }
+    mlir::ExecutionEngine::setupTargetTripleAndDataLayout(llvmModule.get(),
+                                                          tmOrError.get().get());
     return llvmModule;
   };
 
