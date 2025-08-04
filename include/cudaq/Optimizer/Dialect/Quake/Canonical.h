@@ -49,7 +49,7 @@ public:
     if (!subveq)
       return mlir::failure();
     // Let the combining of back-to-back subveq ops happen first.
-    if (isa<SubVeqOp>(subveq.getVeq().getDefiningOp()))
+    if (mlir::isa<SubVeqOp>(subveq.getVeq().getDefiningOp()))
       return mlir::failure();
 
     mlir::Value offset;
@@ -62,7 +62,7 @@ public:
     }();
     if (extract.hasConstantIndex()) {
       mlir::Value cv = rewriter.create<mlir::arith::ConstantIntOp>(
-          loc, extract.getConstantIndex(), low.getType());
+          loc, low.getType(), extract.getConstantIndex());
       offset = rewriter.create<mlir::arith::AddIOp>(loc, cv, low);
     } else {
       auto cast1 = createCast(rewriter, loc, extract.getIndex());

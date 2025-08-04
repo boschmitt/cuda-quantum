@@ -37,7 +37,7 @@ static std::size_t getStateSize(Operation *op) {
     while (defOp && !dyn_cast<arith::ConstantIntOp>(defOp))
       defOp = defOp->getOperand(0).getDefiningOp();
     if (auto constOp = dyn_cast<arith::ConstantIntOp>(defOp))
-      return constOp.getValue().cast<IntegerAttr>().getInt();
+      return cast<IntegerAttr>(constOp.getValue()).getInt();
   }
   op->emitError("Cannot compute number of qubits from createStateOp");
   return 0;
@@ -67,7 +67,7 @@ public:
     if (auto createStateOp = stateOp.getDefiningOp<quake::CreateStateOp>()) {
       auto size = getStateSize(createStateOp);
       rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(
-          op, std::countr_zero(size), rewriter.getI64Type());
+          op, rewriter.getI64Type(), llvm::countr_zero(size));
       return success();
     }
     return failure();
@@ -129,7 +129,7 @@ public:
 
       LLVM_DEBUG(llvm::dbgs() << "Before deleting states: " << func << '\n');
 
-      if (failed(applyPatternsAndFoldGreedily(func.getOperation(),
+      if (failed(applyPatternsGreedily(func.getOperation(),
                                               std::move(patterns))))
         signalPassFailure();
 

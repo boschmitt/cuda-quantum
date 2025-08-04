@@ -59,9 +59,9 @@ public:
         }
         if (isa<quake::VeqType>(alloc.getType())) {
           Value lo = rewriter.create<arith::ConstantIntOp>(
-              alloc.getLoc(), os.first, rewriter.getI64Type());
+              alloc.getLoc(), rewriter.getI64Type(), os.first);
           Value hi = rewriter.create<arith::ConstantIntOp>(
-              alloc.getLoc(), os.first + os.second - 1, rewriter.getI64Type());
+              alloc.getLoc(), rewriter.getI64Type(), os.first + os.second - 1);
           [[maybe_unused]] Value subveq =
               rewriter.replaceOpWithNewOp<quake::SubVeqOp>(
                   alloc, alloc.getType(), analysis.newAlloc, lo, hi);
@@ -152,7 +152,7 @@ public:
       patterns.insert<AllocaPat>(ctx, analysis);
       patterns.insert<quake::canonical::ExtractRefFromSubVeqPattern,
                       quake::canonical::CombineSubVeqsPattern>(ctx);
-      if (failed(applyPatternsAndFoldGreedily(func.getOperation(),
+      if (failed(applyPatternsGreedily(func.getOperation(),
                                               std::move(patterns)))) {
         func.emitOpError("combining alloca, subveq, and extract ops failed");
         signalPassFailure();

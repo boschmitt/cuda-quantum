@@ -2029,7 +2029,7 @@ struct QuakeToQIRAPIPrepPass
       RewritePatternSet patterns(ctx);
       QIRAPITypeConverter typeConverter(opaquePtr);
       cudaq::opt::populateQuakeToCCPrepPatterns(patterns);
-      if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns)))) {
+      if (failed(applyPatternsGreedily(module, std::move(patterns)))) {
         signalPassFailure();
         return;
       }
@@ -2198,7 +2198,7 @@ struct QuakeToQIRAPIFinalPass
     RewritePatternSet patterns(ctx);
     patterns.insert<MaterializeConstantArrayOpRewrite,
                     AnnotateKernelsWithMeasurementStringsPattern>(ctx);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns))))
+    if (failed(applyPatternsGreedily(module, std::move(patterns))))
       signalPassFailure();
   }
 };

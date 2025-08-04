@@ -492,7 +492,7 @@ struct QIRToQIRProfileQIRPass
                 XCtrlOneTargetToCNot, ZCtrlOneTargetToCZ>(context);
     if (convertTo.getValue() == "qir-adaptive")
       patterns.insert<LoadMeasureResult>(context);
-    if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns))))
+    if (failed(applyPatternsGreedily(op, std::move(patterns))))
       signalPassFailure();
     LLVM_DEBUG(llvm::dbgs() << "After QIR profile:\n" << *op << '\n');
   }

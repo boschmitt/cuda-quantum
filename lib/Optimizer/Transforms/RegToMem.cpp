@@ -66,8 +66,7 @@ struct RegToMemAnalysis {
   unsigned getCardinality() const { return cardinality; }
 
   std::optional<unsigned> idFromValue(Value v) const {
-    auto iter = eqClasses.findValue(toOpaque(v));
-    if (iter == eqClasses.end())
+    if (!eqClasses.contains(toOpaque(v)))
       return std::nullopt;
     return setIds.find(eqClasses.getLeaderValue(toOpaque(v)))->second;
   }
@@ -87,10 +86,10 @@ private:
         auto *term = pred->getTerminator();
         auto i = successorIndex(term, block);
         Value u = cast<BranchOpInterface>(term).getSuccessorOperands(i)[argNum];
-        if (eqClasses.findValue(toOpaque(u)) == eqClasses.end())
-          insertToEqClass(u, v);
-        else
+        if (eqClasses.contains(toOpaque(u)))
           eqClasses.unionSets(toOpaque(v), toOpaque(u));
+        else
+          insertToEqClass(u, v);
       }
     }
   }
@@ -249,8 +248,8 @@ private:
     }
     unsigned id = 0;
     for (auto i = eqClasses.begin(), end = eqClasses.end(); i != end; ++i)
-      if (i->isLeader()) {
-        void *leader = const_cast<void *>(*eqClasses.findLeader(i));
+      if ((*i)->isLeader()) {
+        void *leader = const_cast<void *>(*eqClasses.findLeader(**i));
         setIds.insert(std::make_pair(leader, id++));
       }
   }
@@ -258,10 +257,10 @@ private:
   // For debugging purposes.
   void dump() const {
     for (auto i = eqClasses.begin(); i != eqClasses.end(); ++i) {
-      if (!i->isLeader())
+      if (!(*i)->isLeader())
         continue;
       llvm::errs() << "Set {\n";
-      for (auto e = eqClasses.member_begin(i); e != eqClasses.member_end(); ++e)
+      for (auto e = eqClasses.member_begin(**i); e != eqClasses.member_end(); ++e)
         llvm::errs() << "  " << Value::getFromOpaquePointer(*e) << '\n';
       llvm::errs() << "}\n";
     }
@@ -381,7 +380,7 @@ struct EraseWiresCondBranch : public OpRewritePattern<cf::CondBranchOp> {
         newFalseOperands.push_back(v);
     }
     rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        branch, branch.getCondition(), newTrueOperands, newFalseOperands,
+        branch, branch.getCondition(), newTrueOperands, newFalseOperands, branch.getBranchWeightsAttr(),
         branch.getTrueDest(), branch.getFalseDest());
     return success();
   }

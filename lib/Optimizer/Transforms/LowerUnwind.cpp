@@ -454,7 +454,7 @@ struct FuncLikeOpPattern : public OpRewritePattern<OP> {
     assert(iter != infoMap.opParentMap.end());
     if (!func->hasAttr("add_dealloc"))
       return success();
-    rewriter.updateRootInPlace(func,
+    rewriter.modifyOpInPlace(func,
                                [&]() { func->removeAttr("add_dealloc"); });
     if (!iter->second.asPrimitive) {
       LLVM_DEBUG(llvm::dbgs() << "func was not marked as primitive in map\n");

@@ -16,6 +16,7 @@
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeTypes.h"
 #include "cudaq/Optimizer/Transforms/Passes.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -85,14 +86,13 @@ void synthesizeRuntimeArgument(
 template <typename T>
 Value makeIntegerElement(OpBuilder &builder, Location argLoc, T val,
                          IntegerType eleTy) {
-  return builder.create<arith::ConstantIntOp>(argLoc, val, eleTy);
+  return builder.create<arith::ConstantIntOp>(argLoc, eleTy, val);
 }
 
 template <typename T>
 Value makeFloatElement(OpBuilder &builder, Location argLoc, T val,
                        FloatType eleTy) {
-  return builder.create<arith::ConstantFloatOp>(argLoc, llvm::APFloat{val},
-                                                eleTy);
+  return builder.create<arith::ConstantFloatOp>(argLoc, eleTy, llvm::APFloat{val});
 }
 
 template <typename T>
@@ -183,7 +183,7 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
     // Replace a `vec.size()` with the length, which is a synthesized constant.
     if (auto stdvecSizeOp = dyn_cast<cudaq::cc::StdvecSizeOp>(argUser)) {
       Value length = builder.create<arith::ConstantIntOp>(
-          argLoc, vec.size(), stdvecSizeOp.getType());
+          argLoc, stdvecSizeOp.getType(), vec.size());
       stdvecSizeOp.replaceAllUsesWith(length);
       continue;
     }
@@ -519,7 +519,7 @@ public:
             [=](OpBuilder &builder, float *concrete) {
               llvm::APFloat f(*concrete);
               return builder.create<arith::ConstantFloatOp>(
-                  loc, f, builder.getF32Type());
+                  loc, builder.getF32Type(), f);
             });
         continue;
       }
@@ -530,7 +530,7 @@ public:
             [=](OpBuilder &builder, double *concrete) {
               llvm::APFloat f(*concrete);
               return builder.create<arith::ConstantFloatOp>(
-                  loc, f, builder.getF64Type());
+                  loc, builder.getF64Type(), f);
             });
         continue;
       }

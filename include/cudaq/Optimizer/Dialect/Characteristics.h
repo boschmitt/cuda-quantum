@@ -16,15 +16,14 @@ namespace cudaq::opt {
 namespace internal {
 
 template <typename A>
-concept isOpTestFunction =
-    std::is_convertible_v<A, std::function<bool(mlir::Operation &)>>;
+using isOpTestFunction = std::is_convertible<A, std::function<bool(mlir::Operation &)>>;
 
 /// The hasCharacteristic() template function recursively tests if an Op or a
 /// Op's regions (e.g., cc.if, cc.loop, cc.scope) have any Op that matches a
 /// particular condition as specified in the function parameter `test`.
 template <typename A>
-  requires isOpTestFunction<A>
-bool hasCharacteristic(A &&test, mlir::Operation &op) {
+typename std::enable_if<isOpTestFunction<A>::value, bool>::type
+hasCharacteristic(A &&test, mlir::Operation &op) {
   for (auto &region : op.getRegions()) {
     if (region.empty())
       continue;

@@ -37,7 +37,7 @@ void appendMeasurement(MeasureBasis &basis, OpBuilder &builder, Location &loc,
     } else if (basis == MeasureBasis::Y) {
       llvm::APFloat d(M_PI_2);
       Value rotation =
-          builder.create<arith::ConstantFloatOp>(loc, d, builder.getF64Type());
+          builder.create<arith::ConstantFloatOp>(loc, builder.getF64Type(), d);
       auto newOp = builder.create<quake::RxOp>(
           loc, TypeRange{wireTy}, /*is_adj=*/false, ValueRange{rotation},
           ValueRange{}, ValueRange{qubit}, DenseBoolArrayAttr{});
@@ -51,7 +51,7 @@ void appendMeasurement(MeasureBasis &basis, OpBuilder &builder, Location &loc,
     } else if (basis == MeasureBasis::Y) {
       llvm::APFloat d(M_PI_2);
       Value rotation =
-          builder.create<arith::ConstantFloatOp>(loc, d, builder.getF64Type());
+          builder.create<arith::ConstantFloatOp>(loc, builder.getF64Type(), d);
       SmallVector<Value> params{rotation};
       builder.create<quake::RxOp>(loc, params, ValueRange{}, targets);
     }
@@ -321,7 +321,7 @@ public:
 
     auto measTy = quake::MeasureType::get(builder.getContext());
     auto wireTy = quake::WireType::get(builder.getContext());
-    for (auto &[measureNum, qubitToMeasure] :
+    for (auto [measureNum, qubitToMeasure] :
          llvm::enumerate(qubitsToMeasure)) {
       // add the measure
       char regName[16];

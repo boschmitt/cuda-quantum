@@ -76,7 +76,7 @@ std::vector<std::size_t> getControlIndices(std::size_t numBits) {
   return indices;
 }
 
-std::vector<double> convertAngles(const std::span<double> alphas) {
+std::vector<double> convertAngles(const ArrayRef<double> alphas) {
   // Implements Eq. (3) from https://arxiv.org/pdf/quant-ph/0407010.pdf
   //
   // N.B: The paper does fails to explicitly define what is the dot operator in
@@ -101,7 +101,7 @@ std::vector<double> convertAngles(const std::span<double> alphas) {
   return thetas;
 }
 
-std::vector<double> getAlphaZ(const std::span<double> data,
+std::vector<double> getAlphaZ(ArrayRef<const double> data,
                               std::size_t numQubits, std::size_t k) {
   // Implements Eq. (5) from https://arxiv.org/pdf/quant-ph/0407010.pdf
   std::vector<double> angles;
@@ -118,7 +118,7 @@ std::vector<double> getAlphaZ(const std::span<double> data,
   return angles;
 }
 
-std::vector<double> getAlphaY(const std::span<double> data,
+std::vector<double> getAlphaY(ArrayRef<const double> data,
                               std::size_t numQubits, std::size_t k) {
   // Implements Eq. (8) from https://arxiv.org/pdf/quant-ph/0407010.pdf
   // N.B: There is an extra '-1' on these indices computations to account for
@@ -168,7 +168,7 @@ public:
 
 private:
   mlir::Value createQubitRef(std::size_t index) {
-    if (qubitRefs.contains(index))
+    if (qubitRefs.find(index) != qubitRefs.end())
       return qubitRefs[index];
 
     auto ref = rewriter.create<quake::ExtractRefOp>(loc, qubits, index);
@@ -178,7 +178,7 @@ private:
 
   mlir::Value createAngleValue(double angle) {
     return rewriter.create<mlir::arith::ConstantFloatOp>(
-        loc, llvm::APFloat{angle}, rewriter.getF64Type());
+        loc, rewriter.getF64Type(), llvm::APFloat{angle});
   }
 
   PatternRewriter &rewriter;
@@ -191,7 +191,7 @@ private:
 
 class StateDecomposer {
 public:
-  StateDecomposer(StateGateBuilder &b, std::span<std::complex<double>> a,
+  StateDecomposer(StateGateBuilder &b, ArrayRef<std::complex<double>> a,
                   double t)
       : builder(b), amplitudes(a), numQubits(log2(a.size())),
         phaseThreshold(t) {}
@@ -245,7 +245,7 @@ public:
 private:
   /// @brief Apply a uniformly controlled rotation on the target qubit.
   template <typename Op>
-  void applyRotation(const std::span<double> alphas, std::size_t numControls,
+  void applyRotation(const ArrayRef<double> alphas, std::size_t numControls,
                      std::size_t target) {
 
     // In our model the index 1 (i.e. |01>) in quantum state data
@@ -269,7 +269,7 @@ private:
   }
 
   StateGateBuilder &builder;
-  std::span<std::complex<double>> amplitudes;
+  ArrayRef<std::complex<double>> amplitudes;
   std::size_t numQubits;
   double phaseThreshold;
 };
@@ -380,7 +380,7 @@ public:
     RewritePatternSet patterns(ctx);
     patterns.insert<StatePrepPattern>(ctx, phaseThreshold);
 
-    if (failed(applyPatternsAndFoldGreedily(func, std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(func, std::move(patterns)))) {
       func.emitOpError("State preparation failed");
       signalPassFailure();
     }

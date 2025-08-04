@@ -204,13 +204,13 @@ public:
     if (auto intTy = dyn_cast<IntegerType>(loadTy)) {
       auto intAttr = cast<IntegerAttr>(attr);
       rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(
-          loadSpanEle, intAttr.getInt(), intTy);
+          loadSpanEle, intTy, intAttr.getInt());
       return success();
     }
     if (auto floatTy = dyn_cast<FloatType>(loadTy)) {
       auto floatAttr = cast<FloatAttr>(attr);
       rewriter.replaceOpWithNewOp<arith::ConstantFloatOp>(
-          loadSpanEle, floatAttr.getValue(), floatTy);
+          loadSpanEle, floatTy, floatAttr.getValue());
       return success();
     }
     return failure();
@@ -231,7 +231,7 @@ public:
 
     LLVM_DEBUG(llvm::dbgs() << "Before constant prop:\n" << func << '\n');
 
-    if (failed(applyPatternsAndFoldGreedily(func.getOperation(),
+    if (failed(applyPatternsGreedily(func.getOperation(),
                                             std::move(patterns)))) {
       signalPassFailure();
       return;

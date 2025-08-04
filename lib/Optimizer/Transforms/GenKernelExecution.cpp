@@ -315,7 +315,7 @@ public:
       args.push_back(a);
     }
     auto call = builder.create<cudaq::cc::NoInlineCallOp>(
-        loc, funcTy.getResults(), funcOp.getName(), args);
+        loc, funcTy.getResults(), funcOp.getName(), args, ArrayAttr(), ArrayAttr());
     const bool hasVectorResult =
         funcTy.getNumResults() == 1 &&
         isa<cudaq::cc::SpanLikeType>(funcTy.getResult(0));
@@ -538,7 +538,7 @@ public:
 
     // Prepare to call the `launchKernel` runtime library entry point.
     Value loadKernName = builder.create<LLVM::AddressOfOp>(
-        loc, cudaq::opt::factory::getPointerType(kernelNameObj.getType()),
+        loc, LLVM::LLVMPointerType::get(ctx),
         kernelNameObj.getSymName());
     auto castLoadKernName =
         builder.create<cudaq::cc::CastOp>(loc, ptrI8Ty, loadKernName);
@@ -720,10 +720,10 @@ public:
         loc, classNameStr + ".kernelRegFunc",
         LLVM::LLVMFunctionType::get(cudaq::opt::factory::getVoidType(ctx), {}));
     OpBuilder::InsertionGuard guard(builder);
-    auto *initFunEntry = initFun.addEntryBlock();
+    auto *initFunEntry = initFun.addEntryBlock(builder);
     builder.setInsertionPointToStart(initFunEntry);
     auto kernRef = builder.create<LLVM::AddressOfOp>(
-        loc, cudaq::opt::factory::getPointerType(kernelNameObj.getType()),
+        loc, LLVM::LLVMPointerType::get(ctx),
         kernelNameObj.getSymName());
     auto castKernRef = builder.create<cudaq::cc::CastOp>(loc, ptrType, kernRef);
     builder.create<func::CallOp>(loc, std::nullopt,
@@ -766,13 +766,13 @@ public:
 
         builder.restoreInsertionPoint(insertPoint);
         auto lambdaRef = builder.create<LLVM::AddressOfOp>(
-            loc, cudaq::opt::factory::getPointerType(lambdaName.getType()),
+            loc, LLVM::LLVMPointerType::get(ctx),
             lambdaName.getSymName());
 
         auto castLambdaRef = builder.create<cudaq::cc::CastOp>(
-            loc, cudaq::opt::factory::getPointerType(ctx), lambdaRef);
+            loc, LLVM::LLVMPointerType::get(ctx), lambdaRef);
         auto castKernelRef = builder.create<cudaq::cc::CastOp>(
-            loc, cudaq::opt::factory::getPointerType(ctx), castKernRef);
+            loc, LLVM::LLVMPointerType::get(ctx), castKernRef);
         builder.create<LLVM::CallOp>(loc, std::nullopt,
                                      cudaq::runtime::CudaqRegisterLambdaName,
                                      ValueRange{castLambdaRef, castKernelRef});
@@ -868,7 +868,7 @@ public:
     SmallVector<func::FuncOp> workList;
     for (auto &op : *module.getBody())
       if (auto funcOp = dyn_cast<func::FuncOp>(op))
-        if (funcOp.getName().startswith(cudaq::runtime::cudaqGenPrefixName) &&
+        if (funcOp.getName().starts_with(cudaq::runtime::cudaqGenPrefixName) &&
             cudaq::opt::marshal::hasLegalType(funcOp.getFunctionType()))
           workList.push_back(funcOp);
 

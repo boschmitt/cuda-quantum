@@ -238,7 +238,7 @@ struct ReturnToOutputLogPass
     RewritePatternSet patterns(ctx);
     patterns.insert<ReturnRewrite>(ctx);
     LLVM_DEBUG(llvm::dbgs() << "Before return to output logging:\n" << module);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns))))
+    if (failed(applyPatternsGreedily(module, std::move(patterns))))
       signalPassFailure();
     LLVM_DEBUG(llvm::dbgs() << "After return to output logging:\n" << module);
   }

@@ -88,7 +88,7 @@ public:
 
     patterns.add<ResolveDevicePtrOpPat>(ctx);
     patterns.insert<QIRVendorDeviceCallPat>(ctx);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns))))
+    if (failed(applyPatternsGreedily(module, std::move(patterns))))
       signalPassFailure();
     return;
   }

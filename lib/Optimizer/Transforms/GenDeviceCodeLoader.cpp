@@ -54,8 +54,8 @@ public:
           loc, cudaq::runtime::deviceCodeHolderAdd,
           LLVM::LLVMFunctionType::get(
               cudaq::opt::factory::getVoidType(ctx),
-              {cudaq::opt::factory::getPointerType(ctx),
-               cudaq::opt::factory::getPointerType(ctx)}));
+              {LLVM::LLVMPointerType::get(ctx),
+               LLVM::LLVMPointerType::get(ctx)}));
     }
 
     auto mangledNameMap =
@@ -89,7 +89,7 @@ public:
       auto funcOp = dyn_cast<func::FuncOp>(op);
       if (!funcOp)
         continue;
-      if (!funcOp.getName().startswith(cudaq::runtime::cudaqGenPrefixName))
+      if (!funcOp.getName().starts_with(cudaq::runtime::cudaqGenPrefixName))
         continue;
       if (funcOp->hasAttr(cudaq::generatorAnnotation) || funcOp.empty())
         continue;
@@ -163,18 +163,18 @@ public:
           LLVM::LLVMFunctionType::get(cudaq::opt::factory::getVoidType(ctx),
                                       {}));
       auto insPt = builder.saveInsertionPoint();
-      auto *initFunEntry = initFun.addEntryBlock();
+      auto *initFunEntry = initFun.addEntryBlock(builder);
       builder.setInsertionPointToStart(initFunEntry);
       auto devRef = builder.create<LLVM::AddressOfOp>(
-          loc, cudaq::opt::factory::getPointerType(devName.getType()),
+          loc, LLVM::LLVMPointerType::get(ctx),
           devName.getSymName());
       auto codeRef = builder.create<LLVM::AddressOfOp>(
-          loc, cudaq::opt::factory::getPointerType(devCode.getType()),
+          loc, LLVM::LLVMPointerType::get(ctx),
           devCode.getSymName());
       auto castDevRef = builder.create<LLVM::BitcastOp>(
-          loc, cudaq::opt::factory::getPointerType(ctx), devRef);
+          loc, LLVM::LLVMPointerType::get(ctx), devRef);
       auto castCodeRef = builder.create<LLVM::BitcastOp>(
-          loc, cudaq::opt::factory::getPointerType(ctx), codeRef);
+          loc, LLVM::LLVMPointerType::get(ctx), codeRef);
       builder.create<LLVM::CallOp>(loc, std::nullopt,
                                    cudaq::runtime::deviceCodeHolderAdd,
                                    ValueRange{castDevRef, castCodeRef});
