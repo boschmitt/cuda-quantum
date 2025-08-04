@@ -135,7 +135,7 @@ inline void generateDeallocsForSet(PatternRewriter &rewriter,
               dyn_cast<quake::InitializeStateOp>(*a->getUsers().begin()))
         v = initState;
     }
-    rewriter.create<quake::DeallocOp>(a->getLoc(), v);
+    quake::DeallocOp::create(rewriter, a->getLoc(), v);
   }
 }
 
@@ -197,7 +197,7 @@ LogicalResult addDeallocations(OP wrapper, PatternRewriter &rewriter,
   // 3) Create the deallocations.
   rewriter.setInsertionPointToEnd(exitBlock);
   generateDeallocsForSet(rewriter, allocs);
-  rewriter.create<RET>(wrapper.getLoc(), exitBlock->getArguments());
+  RET::create(rewriter, wrapper.getLoc(), exitBlock->getArguments());
 
   rewriter.finalizeOpModification(wrapper);
   LLVM_DEBUG(llvm::dbgs() << "updated " << wrapper.getOperation() << '\n');

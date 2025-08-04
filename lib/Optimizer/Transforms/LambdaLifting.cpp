@@ -118,11 +118,11 @@ struct ComputeActionOpPattern
                                 PatternRewriter &rewriter) const override {
     auto *ctx = rewriter.getContext();
     auto loc = comAct.getLoc();
-    rewriter.create<quake::ApplyOp>(loc, TypeRange{},
+    quake::ApplyOp::create(rewriter, loc, TypeRange{},
                                     getCallee(ctx, comAct.getCompute()),
                                     /*isAdjoint=*/comAct.getIsDagger(),
                                     ValueRange{}, getArgs(comAct.getCompute()));
-    rewriter.create<quake::ApplyOp>(
+    quake::ApplyOp::create(rewriter,
         loc, TypeRange{}, getCallee(ctx, comAct.getAction()),
         /*isAdjoint=*/false, ValueRange{}, getArgs(comAct.getAction()));
     rewriter.replaceOpWithNewOp<quake::ApplyOp>(
@@ -170,7 +170,8 @@ struct CallCallableOpPattern
 
     // For a callable, call the trampoline with the closure data.
     if (auto lambTy = dyn_cast<cudaq::cc::CallableType>(closureTy)) {
-      auto dynFunc = rewriter.create<cudaq::cc::CallableFuncOp>(
+      auto dynFunc = cudaq::cc::CallableFuncOp::create(
+          rewriter,
           loc, call.getFunctionType(), closure);
       rewriter.replaceOpWithNewOp<func::CallIndirectOp>(call, dynFunc,
                                                         operands);
@@ -180,7 +181,7 @@ struct CallCallableOpPattern
     // For a normal function, there is no closure to deal with.
     if (auto sig = dyn_cast<FunctionType>(closureTy)) {
       auto dynFunc =
-          rewriter.create<cudaq::cc::CallableFuncOp>(loc, sig, closure);
+          cudaq::cc::CallableFuncOp::create(rewriter, loc, sig, closure);
       rewriter.replaceOpWithNewOp<func::CallIndirectOp>(call, dynFunc,
                                                         operands.drop_front());
       return success();
@@ -263,7 +264,8 @@ public:
         argTys.push_back(lambdaTy);
         argTys.append(sig.getInputs().begin(), sig.getInputs().end());
         auto funTy = FunctionType::get(ctx, argTys, sig.getResults());
-        auto thunk = build.create<func::FuncOp>(
+        auto thunk = func::FuncOp::create(
+            build,
             loc, getThunkLambdaName(counter), funTy, emptyDict);
         thunk.setPrivate();
         thunk->setAttr(cudaq::kernelAttrName, build.getUnitAttr());
@@ -271,16 +273,18 @@ public:
         build.setInsertionPointToEnd(entry);
         SmallVector<Value> callableArgs;
         if (!freeValues.empty()) {
-          auto closureData = build.create<cudaq::cc::CallableClosureOp>(
+          auto closureData = cudaq::cc::CallableClosureOp::create(
+              build,
               loc, freeValues.getTypes(), thunk.getArgument(0));
           callableArgs.append(closureData.getResults().begin(),
                               closureData.getResults().end());
         }
         callableArgs.append(thunk.getArguments().begin() + 1,
                             thunk.getArguments().end());
-        auto result = build.create<func::CallOp>(
+        auto result = func::CallOp::create(
+            build,
             loc, sig.getResults(), getLiftedLambdaName(counter), callableArgs);
-        build.create<func::ReturnOp>(loc, sig.getResults(),
+        func::ReturnOp::create(build, loc, sig.getResults(),
                                      result.getResults());
       }
 
@@ -293,7 +297,8 @@ public:
         argTys.append(sig.getInputs().begin(), sig.getInputs().end());
         auto funTy = FunctionType::get(ctx, argTys, sig.getResults());
         build.setInsertionPointToEnd(module.getBody());
-        auto func = build.create<func::FuncOp>(
+        auto func = func::FuncOp::create(
+            build,
             loc, getLiftedLambdaName(counter), funTy, emptyDict);
         func.setPrivate();
         func->setAttr(cudaq::kernelAttrName, build.getUnitAttr());
@@ -321,7 +326,7 @@ public:
         build.setInsertionPointToEnd(entry);
         auto nextBlockIter = ++func.getBlocks().begin();
         // Connect entry block to cloned code.
-        build.create<cf::BranchOp>(loc, &*nextBlockIter);
+        cf::BranchOp::create(build, loc, &*nextBlockIter);
       }
 
       SymbolRefAttr closureSymbol =

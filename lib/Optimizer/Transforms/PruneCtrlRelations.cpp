@@ -72,7 +72,7 @@ public:
     // Create a copy of `op` with the correct coarity and with the control wires
     // each now passing through a ToControlOp.
     SmallVector<Type> wireTys{coarity, wireTy};
-    auto newOp = rewriter.create<OP>(
+    auto newOp = OP::create(rewriter,
         loc, wireTys, op.getIsAdjAttr(), op.getParameters(), newCtrls,
         op.getTargets(), op.getNegatedQubitControlsAttr());
 
@@ -82,7 +82,7 @@ public:
     for (auto i : llvm::enumerate(op.getControls())) {
       auto cv = i.value();
       if (cv.getType() == wireTy) {
-        Value fromCtrl = rewriter.template create<quake::FromControlOp>(
+        Value fromCtrl = quake::FromControlOp::create(rewriter,
             loc, wireTy, newCtrls[i.index()]);
         op.getResult(i.index()).replaceAllUsesWith(fromCtrl);
       } else {

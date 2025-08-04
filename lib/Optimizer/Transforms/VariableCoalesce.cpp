@@ -242,7 +242,7 @@ public:
         }
         auto loc = o->getLoc();
         auto ty = cast<cudaq::cc::AllocaOp>(o).getElementType();
-        auto newVar = rewriter.create<cudaq::cc::AllocaOp>(loc, ty);
+        auto newVar = cudaq::cc::AllocaOp::create(rewriter, loc, ty);
         analysis.addBinding(o, newVar);
       }
     }

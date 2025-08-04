@@ -58,10 +58,10 @@ public:
           return success();
         }
         if (isa<quake::VeqType>(alloc.getType())) {
-          Value lo = rewriter.create<arith::ConstantIntOp>(
-              alloc.getLoc(), rewriter.getI64Type(), os.first);
-          Value hi = rewriter.create<arith::ConstantIntOp>(
-              alloc.getLoc(), rewriter.getI64Type(), os.first + os.second - 1);
+          Value lo = arith::ConstantIntOp::create(
+              rewriter, alloc.getLoc(), rewriter.getI64Type(), os.first);
+          Value hi = arith::ConstantIntOp::create(
+              rewriter, alloc.getLoc(), rewriter.getI64Type(), os.first + os.second - 1);
           [[maybe_unused]] Value subveq =
               rewriter.replaceOpWithNewOp<quake::SubVeqOp>(
                   alloc, alloc.getType(), analysis.newAlloc, lo, hi);
@@ -76,15 +76,15 @@ public:
           for (auto m : sty.getMembers()) {
             auto v = [&]() -> Value {
               if (isa<quake::RefType>(m)) {
-                auto result = rewriter.create<quake::ExtractRefOp>(
-                    loc, analysis.newAlloc, inner);
+                auto result = quake::ExtractRefOp::create(
+                    rewriter, loc, analysis.newAlloc, inner);
                 inner++;
                 return result;
               }
               assert(cast<quake::VeqType>(m).hasSpecifiedSize());
               std::size_t dist = inner + cast<quake::VeqType>(m).getSize() - 1;
-              auto result = rewriter.create<quake::SubVeqOp>(
-                  loc, m, analysis.newAlloc, inner, dist);
+              auto result = quake::SubVeqOp::create(
+                  rewriter, loc, m, analysis.newAlloc, inner, dist);
               inner = dist + 1;
               return result;
             }();
@@ -141,7 +141,7 @@ public:
     OpBuilder rewriter(ctx);
     rewriter.setInsertionPointToStart(entryBlock);
     auto veqTy = quake::VeqType::get(ctx, currentOffset);
-    analysis.newAlloc = rewriter.create<quake::AllocaOp>(loc, veqTy);
+    analysis.newAlloc = quake::AllocaOp::create(rewriter, loc, veqTy);
 
     // 3. Greedily replace the uses of the original alloca ops with uses of
     // partitions of the new alloca op. Replace subveq of subveq with a single
@@ -166,8 +166,8 @@ public:
       for (auto &block : func.getRegion()) {
         if (block.hasNoSuccessors()) {
           rewriter.setInsertionPoint(block.getTerminator());
-          rewriter.create<quake::DeallocOp>(analysis.newAlloc.getLoc(),
-                                            analysis.newAlloc);
+          quake::DeallocOp::create(rewriter, analysis.newAlloc.getLoc(),
+                                   analysis.newAlloc);
         }
       }
     }

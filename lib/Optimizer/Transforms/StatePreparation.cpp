@@ -157,13 +157,13 @@ public:
   void applyRotationOp(double theta, std::size_t target) {
     auto qubit = createQubitRef(target);
     auto thetaValue = createAngleValue(theta);
-    rewriter.create<Op>(loc, thetaValue, mlir::ValueRange{}, qubit);
+    Op::create(rewriter, loc, thetaValue, mlir::ValueRange{}, qubit);
   };
 
   void applyX(std::size_t control, std::size_t target) {
     auto qubitC = createQubitRef(control);
     auto qubitT = createQubitRef(target);
-    rewriter.create<quake::XOp>(loc, qubitC, qubitT);
+    quake::XOp::create(rewriter, loc, qubitC, qubitT);
   };
 
 private:
@@ -171,14 +171,13 @@ private:
     if (qubitRefs.find(index) != qubitRefs.end())
       return qubitRefs[index];
 
-    auto ref = rewriter.create<quake::ExtractRefOp>(loc, qubits, index);
+    auto ref = quake::ExtractRefOp::create(rewriter, loc, qubits, index);
     qubitRefs[index] = ref;
     return ref;
   }
 
   mlir::Value createAngleValue(double angle) {
-    return rewriter.create<mlir::arith::ConstantFloatOp>(
-        loc, rewriter.getF64Type(), llvm::APFloat{angle});
+    return arith::ConstantFloatOp::create(rewriter, loc, rewriter.getF64Type(), llvm::APFloat{angle});
   }
 
   PatternRewriter &rewriter;

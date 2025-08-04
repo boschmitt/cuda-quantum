@@ -114,8 +114,8 @@ public:
     }
     Type loadTy = loadSpan.getType();
     auto arrayAttr = cast<ArrayAttr>(attr);
-    Value newConArr = rewriter.create<cudaq::cc::ConstantArrayOp>(
-        loadSpan.getLoc(), ty, arrayAttr);
+    Value newConArr = cudaq::cc::ConstantArrayOp::create(
+        rewriter, loadSpan.getLoc(), ty, arrayAttr);
     rewriter.replaceOpWithNewOp<cudaq::cc::ReifySpanOp>(loadSpan, loadTy,
                                                         newConArr);
     return success();
@@ -193,10 +193,10 @@ public:
     auto loc = loadSpanEle.getLoc();
     if (isa<cudaq::cc::CharspanType>(loadTy)) {
       auto stringAttr = cast<StringAttr>(attr);
-      auto lit = rewriter.create<cudaq::cc::CreateStringLiteralOp>(
-          loc, cudaq::cc::PointerType::get(ty), stringAttr);
-      auto len = rewriter.create<arith::ConstantIntOp>(
-          loc, stringAttr.getValue().size() + 1, 64);
+      auto lit = cudaq::cc::CreateStringLiteralOp::create(
+          rewriter, loc, cudaq::cc::PointerType::get(ty), stringAttr);
+      auto len = arith::ConstantIntOp::create(
+          rewriter, loc, stringAttr.getValue().size() + 1, 64);
       rewriter.replaceOpWithNewOp<cudaq::cc::StdvecInitOp>(loadSpanEle, loadTy,
                                                            lit, len);
       return success();

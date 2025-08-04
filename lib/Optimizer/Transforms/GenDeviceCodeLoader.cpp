@@ -50,7 +50,7 @@ public:
     auto builder = OpBuilder::atBlockEnd(module.getBody());
     if (generateAsQuake) {
       // Add declaration of deviceCodeHolderAdd
-      builder.create<LLVM::LLVMFuncOp>(
+      LLVM::LLVMFuncOp::create(builder,
           loc, cudaq::runtime::deviceCodeHolderAdd,
           LLVM::LLVMFunctionType::get(
               cudaq::opt::factory::getVoidType(ctx),
@@ -148,34 +148,34 @@ public:
         strOut << *op << '\n';
       strOut << "\n}\n" << '\0';
 
-      auto devCode = builder.create<LLVM::GlobalOp>(
+      auto devCode = LLVM::GlobalOp::create(builder,
           loc, cudaq::opt::factory::getStringType(ctx, funcCode.size()),
           /*isConstant=*/true, LLVM::Linkage::Private,
           className.str() + "CodeHolder.extract_device_code",
           builder.getStringAttr(funcCode), /*alignment=*/0);
-      auto devName = builder.create<LLVM::GlobalOp>(
+      auto devName = LLVM::GlobalOp::create(builder,
           loc, cudaq::opt::factory::getStringType(ctx, className.size() + 1),
           /*isConstant=*/true, LLVM::Linkage::Private,
           className.str() + "CodeHolder.extract_device_name",
           builder.getStringAttr(className.str() + '\0'), /*alignment=*/0);
-      auto initFun = builder.create<LLVM::LLVMFuncOp>(
+      auto initFun = LLVM::LLVMFuncOp::create(builder,
           loc, className.str() + ".init_func",
           LLVM::LLVMFunctionType::get(cudaq::opt::factory::getVoidType(ctx),
                                       {}));
       auto insPt = builder.saveInsertionPoint();
       auto *initFunEntry = initFun.addEntryBlock(builder);
       builder.setInsertionPointToStart(initFunEntry);
-      auto devRef = builder.create<LLVM::AddressOfOp>(
+      auto devRef = LLVM::AddressOfOp::create(builder,
           loc, LLVM::LLVMPointerType::get(ctx),
           devName.getSymName());
-      auto codeRef = builder.create<LLVM::AddressOfOp>(
+      auto codeRef = LLVM::AddressOfOp::create(builder,
           loc, LLVM::LLVMPointerType::get(ctx),
           devCode.getSymName());
-      auto castDevRef = builder.create<LLVM::BitcastOp>(
+      auto castDevRef = LLVM::BitcastOp::create(builder,
           loc, LLVM::LLVMPointerType::get(ctx), devRef);
-      auto castCodeRef = builder.create<LLVM::BitcastOp>(
+      auto castCodeRef = LLVM::BitcastOp::create(builder,
           loc, LLVM::LLVMPointerType::get(ctx), codeRef);
-      builder.create<LLVM::CallOp>(loc, std::nullopt,
+      LLVM::CallOp::create(builder, loc, std::nullopt,
                                    cudaq::runtime::deviceCodeHolderAdd,
                                    ValueRange{castDevRef, castCodeRef});
 
@@ -193,28 +193,28 @@ public:
           hostFuncOp.setPrivate();
         }
         auto ptrTy = cudaq::cc::PointerType::get(builder.getI8Type());
-        auto entryRef = builder.create<func::ConstantOp>(
-            loc, hostFuncOp.getFunctionType(), hostFuncOp.getSymName());
+        auto entryRef = func::ConstantOp::create(
+            builder, loc, hostFuncOp.getFunctionType(), hostFuncOp.getSymName());
         auto castEntryRef =
-            builder.create<cudaq::cc::FuncToPtrOp>(loc, ptrTy, entryRef);
-        auto deviceRef = builder.create<func::ConstantOp>(
-            loc, funcOp.getFunctionType(), funcOp.getSymName());
+            cudaq::cc::FuncToPtrOp::create(builder, loc, ptrTy, entryRef);
+        auto deviceRef = func::ConstantOp::create(
+            builder, loc, funcOp.getFunctionType(), funcOp.getSymName());
         auto castDeviceRef =
-            builder.create<cudaq::cc::FuncToPtrOp>(loc, ptrTy, deviceRef);
+            cudaq::cc::FuncToPtrOp::create(builder, loc, ptrTy, deviceRef);
         auto castKernNameRef =
-            builder.create<cudaq::cc::CastOp>(loc, ptrTy, devRef);
+            cudaq::cc::CastOp::create(builder, loc, ptrTy, devRef);
 
         cudaq::IRBuilder irBuilder(builder);
         if (failed(irBuilder.loadIntrinsic(
                 module, cudaq::runtime::registerLinkableKernel))) {
           signalPassFailure();
         }
-        builder.create<func::CallOp>(
+        func::CallOp::create(builder,
             loc, std::nullopt, cudaq::runtime::registerLinkableKernel,
             ValueRange{castEntryRef, castKernNameRef, castDeviceRef});
       }
 
-      builder.create<LLVM::ReturnOp>(loc, ValueRange{});
+      LLVM::ReturnOp::create(builder, loc, ValueRange{});
       builder.restoreInsertionPoint(insPt);
       cudaq::opt::factory::createGlobalCtorCall(
           module, mlir::FlatSymbolRefAttr::get(ctx, initFun.getName()));

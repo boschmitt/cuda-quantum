@@ -63,8 +63,8 @@ public:
       auto fun = cudaq::opt::factory::createFunction(
           "llvm.stacksave", ArrayRef<Type>{ptrTy}, {}, module);
       fun.setPrivate();
-      auto call = rewriter.create<func::CallOp>(
-          loc, ptrTy, fun.getSymNameAttr(), ArrayRef<Value>{});
+      auto call = func::CallOp::create(rewriter, loc, ptrTy,
+                                       fun.getSymNameAttr(), ArrayRef<Value>{});
       stacksave = call.getResult(0);
     }
     auto initPos = rewriter.getInsertionPoint();
@@ -75,7 +75,7 @@ public:
           endBlock, scopeOp.getResultTypes(),
           SmallVector<Location>(scopeOp.getNumResults(), loc));
       scopeResults = continueBlock->getArguments();
-      rewriter.create<cf::BranchOp>(loc, endBlock);
+      cf::BranchOp::create(rewriter, loc, endBlock);
       endBlock = continueBlock;
     }
 
@@ -89,14 +89,14 @@ public:
 
     auto *entryBlock = &scopeOp.getInitRegion().front();
     rewriter.setInsertionPointToEnd(initBlock);
-    rewriter.create<cf::BranchOp>(loc, entryBlock, ValueRange{});
+    cf::BranchOp::create(rewriter, loc, entryBlock, ValueRange{});
     rewriter.inlineRegionBefore(scopeOp.getInitRegion(), endBlock);
     if (stacksave) {
       rewriter.setInsertionPointToStart(endBlock);
       auto fun = cudaq::opt::factory::createFunction(
           "llvm.stackrestore", {}, ArrayRef<Type>{ptrTy}, module);
       fun.setPrivate();
-      rewriter.create<func::CallOp>(loc, ArrayRef<Type>{}, fun.getSymNameAttr(),
+      func::CallOp::create(rewriter, loc, ArrayRef<Type>{}, fun.getSymNameAttr(),
                                     ArrayRef<Value>{stacksave});
     }
     rewriter.replaceOp(scopeOp, scopeResults);
@@ -199,7 +199,7 @@ public:
       Block *continueBlock = rewriter.createBlock(
           endBlock, loopOp.getResultTypes(),
           SmallVector<Location>(loopOp.getNumResults(), loc));
-      rewriter.create<cf::BranchOp>(loc, endBlock);
+      cf::BranchOp::create(rewriter, loc, endBlock);
       endBlock = continueBlock;
     }
     auto comparison = whileCond.getCondition();
@@ -212,14 +212,14 @@ public:
     if (loopOp.isPostConditional()) {
       // Branch from `initBlock` to getBodyRegion().front().
       rewriter.setInsertionPointToEnd(initBlock);
-      rewriter.create<cf::BranchOp>(loc, bodyBlock, loopOperands);
+      cf::BranchOp::create(rewriter, loc, bodyBlock, loopOperands);
       // Move the body region blocks between initBlock and end block.
       rewriter.inlineRegionBefore(loopOp.getBodyRegion(), endBlock);
       // Replace the condition op with a `cf.cond_br`.
       rewriter.setInsertionPointToEnd(whileBlock);
-      rewriter.create<cf::CondBranchOp>(loc, comparison, bodyBlock,
-                                        whileCond.getResults(), endBlock,
-                                        whileCond.getResults());
+      cf::CondBranchOp::create(rewriter, loc, comparison, bodyBlock,
+                               whileCond.getResults(), endBlock,
+                               whileCond.getResults());
       rewriter.eraseOp(whileCond);
       // Move the while region between the body and end block.
       rewriter.inlineRegionBefore(loopOp.getWhileRegion(), endBlock);
@@ -228,10 +228,10 @@ public:
           loopOp.hasPythonElse() ? loopOp.getElseEntryBlock() : endBlock;
       // Branch from `initBlock` to whileRegion().front().
       rewriter.setInsertionPointToEnd(initBlock);
-      rewriter.create<cf::BranchOp>(loc, whileBlock, loopOperands);
+      cf::BranchOp::create(rewriter, loc, whileBlock, loopOperands);
       // Replace the condition op with a `cf.cond_br` op.
       rewriter.setInsertionPointToEnd(whileBlock);
-      rewriter.create<cf::CondBranchOp>(loc, comparison, bodyBlock,
+      cf::CondBranchOp::create(rewriter, loc, comparison, bodyBlock,
                                         whileCond.getResults(), elseBlock,
                                         whileCond.getResults());
       rewriter.eraseOp(whileCond);
@@ -244,8 +244,8 @@ public:
         auto *stepBlock = loopOp.getStepBlock();
         auto *terminator = stepBlock->getTerminator();
         rewriter.setInsertionPointToEnd(stepBlock);
-        rewriter.create<cf::BranchOp>(loc, whileBlock,
-                                      terminator->getOperands());
+        cf::BranchOp::create(rewriter, loc, whileBlock,
+                             terminator->getOperands());
         rewriter.eraseOp(terminator);
         rewriter.inlineRegionBefore(loopOp.getStepRegion(), endBlock);
       }

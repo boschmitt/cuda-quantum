@@ -653,8 +653,8 @@ protected:
     assert(qubit.has_value() && "Trying to codeGen a virtual allocation "
                                 "without a physical qubit assigned!");
     auto wirety = quake::WireType::get(builder.getContext());
-    auto alloc = builder.create<quake::BorrowWireOp>(
-        builder.getUnknownLoc(), wirety,
+    auto alloc = quake::BorrowWireOp::create(
+        builder, builder.getUnknownLoc(), wirety,
         cudaq::opt::topologyAgnosticWiresetName, qubit.value());
     wire = alloc.getResult();
     hasCodeGen = true;
@@ -1709,8 +1709,7 @@ protected:
 
   void genOp(OpBuilder &builder) override {
     auto wire = dependencies[0].getValue();
-    auto newOp =
-        builder.create<quake::ReturnWireOp>(builder.getUnknownLoc(), wire);
+    auto newOp = quake::ReturnWireOp::create(builder, builder.getUnknownLoc(), wire);
     newOp->setAttrs(associated->getAttrs());
     newOp->removeAttr("dnodeid");
     associated = newOp;
@@ -2605,7 +2604,7 @@ protected:
     }
 
     auto newIf =
-        builder.create<cudaq::cc::IfOp>(oldOp->getLoc(), results, operands);
+        cudaq::cc::IfOp::create(builder, oldOp->getLoc(), results, operands);
     auto *then_region = &newIf.getThenRegion();
     then_block->codeGen(builder, then_region);
 

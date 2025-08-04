@@ -86,13 +86,13 @@ void synthesizeRuntimeArgument(
 template <typename T>
 Value makeIntegerElement(OpBuilder &builder, Location argLoc, T val,
                          IntegerType eleTy) {
-  return builder.create<arith::ConstantIntOp>(argLoc, eleTy, val);
+  return arith::ConstantIntOp::create(builder, argLoc, eleTy, val);
 }
 
 template <typename T>
 Value makeFloatElement(OpBuilder &builder, Location argLoc, T val,
                        FloatType eleTy) {
-  return builder.create<arith::ConstantFloatOp>(argLoc, eleTy, llvm::APFloat{val});
+  return arith::ConstantFloatOp::create(builder, argLoc, eleTy, llvm::APFloat{val});
 }
 
 template <typename T>
@@ -102,7 +102,7 @@ Value makeComplexElement(OpBuilder &builder, Location argLoc,
   auto realPart = builder.getFloatAttr(eleTy, llvm::APFloat{val.real()});
   auto imagPart = builder.getFloatAttr(eleTy, llvm::APFloat{val.imag()});
   auto complexVal = builder.getArrayAttr({realPart, imagPart});
-  return builder.create<complex::ConstantOp>(argLoc, eleTy, complexVal);
+  return complex::ConstantOp::create(builder, argLoc, eleTy, complexVal);
 }
 
 /// returns true if and only if \p argument is used by a `quake.init_state`
@@ -128,8 +128,8 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
   auto eleTy = cast<ELETY>(strTy.getElementType());
   builder.setInsertionPointToStart(argument.getOwner());
   auto argLoc = argument.getLoc();
-  auto conArray = builder.create<cudaq::cc::ConstantArrayOp>(
-      argLoc, cudaq::cc::ArrayType::get(ctx, eleTy, vec.size()), arrayAttr);
+  auto conArray = cudaq::cc::ConstantArrayOp::create(
+      builder, argLoc, cudaq::cc::ArrayType::get(ctx, eleTy, vec.size()), arrayAttr);
   auto arrTy = cudaq::cc::ArrayType::get(ctx, eleTy, vec.size());
   std::optional<Value> arrayInMemory;
   auto ptrEleTy = cudaq::cc::PointerType::get(eleTy);
@@ -150,17 +150,17 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
       irBuilder.genVectorOfConstants(argLoc, module, symbol, vec);
 
       builder.setInsertionPointToStart(argument.getOwner());
-      buffer = builder.create<cudaq::cc::AddressOfOp>(
-          argLoc, cudaq::cc::PointerType::get(arrTy), symbol);
+      buffer = cudaq::cc::AddressOfOp::create(
+          builder, argLoc, cudaq::cc::PointerType::get(arrTy), symbol);
     } else {
       builder.setInsertionPointAfter(conArray);
-      buffer = builder.create<cudaq::cc::AllocaOp>(argLoc, arrTy);
-      builder.create<cudaq::cc::StoreOp>(argLoc, conArray, buffer);
+      buffer = cudaq::cc::AllocaOp::create(builder, argLoc, arrTy);
+      cudaq::cc::StoreOp::create(builder, argLoc, conArray, buffer);
     }
 
     auto ptrArrEleTy =
         cudaq::cc::PointerType::get(cudaq::cc::ArrayType::get(eleTy));
-    Value res = builder.create<cudaq::cc::CastOp>(argLoc, ptrArrEleTy, buffer);
+    Value res = cudaq::cc::CastOp::create(builder, argLoc, ptrArrEleTy, buffer);
     arrayInMemory = res;
     return res;
   };
@@ -182,8 +182,8 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
     // Handle the StdvecSize use case.
     // Replace a `vec.size()` with the length, which is a synthesized constant.
     if (auto stdvecSizeOp = dyn_cast<cudaq::cc::StdvecSizeOp>(argUser)) {
-      Value length = builder.create<arith::ConstantIntOp>(
-          argLoc, stdvecSizeOp.getType(), vec.size());
+      Value length = arith::ConstantIntOp::create(
+          builder, argLoc, stdvecSizeOp.getType(), vec.size());
       stdvecSizeOp.replaceAllUsesWith(length);
       continue;
     }
@@ -214,14 +214,14 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
           if (index == cudaq::cc::ComputePtrOp::kDynamicIndex) {
             OpBuilder::InsertionGuard guard(builder);
             builder.setInsertionPoint(elePtrOp);
-            Value getEle = builder.create<cudaq::cc::ExtractValueOp>(
-                elePtrOp.getLoc(), eleTy, conArray,
+            Value getEle = cudaq::cc::ExtractValueOp::create(
+                builder, elePtrOp.getLoc(), eleTy, conArray,
                 elePtrOp.getDynamicIndices()[0]);
             if (failed(replaceLoads(elePtrOp, getEle))) {
               Value memArr = getArrayInMemory();
               builder.setInsertionPoint(elePtrOp);
-              Value newComputedPtr = builder.create<cudaq::cc::ComputePtrOp>(
-                  argLoc, ptrEleTy, memArr, elePtrOp.getDynamicIndices()[0]);
+              Value newComputedPtr = cudaq::cc::ComputePtrOp::create(
+                  builder, argLoc, ptrEleTy, memArr, elePtrOp.getDynamicIndices()[0]);
               elePtrOp.replaceAllUsesWith(newComputedPtr);
             }
             continue;
@@ -232,8 +232,8 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
             Value memArr = getArrayInMemory();
             OpBuilder::InsertionGuard guard(builder);
             builder.setInsertionPoint(elePtrOp);
-            Value newComputedPtr = builder.create<cudaq::cc::ComputePtrOp>(
-                argLoc, ptrEleTy, memArr,
+            Value newComputedPtr = cudaq::cc::ComputePtrOp::create(
+                builder, argLoc, ptrEleTy, memArr,
                 SmallVector<cudaq::cc::ComputePtrArg>{0, index});
             elePtrOp.replaceAllUsesWith(newComputedPtr);
           }
@@ -259,9 +259,9 @@ synthesizeVectorArgument(OpBuilder &builder, ModuleOp module, unsigned &counter,
     Value memArr = getArrayInMemory();
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointAfter(memArr.getDefiningOp());
-    Value size = builder.create<arith::ConstantIntOp>(argLoc, vec.size(), 64);
+    Value size = arith::ConstantIntOp::create(builder, argLoc, vec.size(), 64);
     Value newVec =
-        builder.create<cudaq::cc::StdvecInitOp>(argLoc, strTy, memArr, size);
+        cudaq::cc::StdvecInitOp::create(builder, argLoc, strTy, memArr, size);
     argument.replaceAllUsesWith(newVec);
   }
   return success();
@@ -472,35 +472,35 @@ public:
           synthesizeRuntimeArgument<bool>(
               builder, argument, args, offset, sizeof(bool),
               [=](OpBuilder &builder, bool *concrete) {
-                return builder.create<arith::ConstantIntOp>(loc, *concrete, 1);
+                return arith::ConstantIntOp::create(builder, loc, *concrete, 1);
               });
           break;
         case 8:
           synthesizeRuntimeArgument<std::uint8_t>(
               builder, argument, args, offset, sizeof(std::uint8_t),
               [=](OpBuilder &builder, std::uint8_t *concrete) {
-                return builder.create<arith::ConstantIntOp>(loc, *concrete, 8);
+                return arith::ConstantIntOp::create(builder, loc, *concrete, 8);
               });
           break;
         case 16:
           synthesizeRuntimeArgument<std::int16_t>(
               builder, argument, args, offset, sizeof(std::int16_t),
               [=](OpBuilder &builder, std::int16_t *concrete) {
-                return builder.create<arith::ConstantIntOp>(loc, *concrete, 16);
+                return arith::ConstantIntOp::create(builder, loc, *concrete, 16);
               });
           break;
         case 32:
           synthesizeRuntimeArgument<std::int32_t>(
               builder, argument, args, offset, sizeof(std::int32_t),
               [=](OpBuilder &builder, std::int32_t *concrete) {
-                return builder.create<arith::ConstantIntOp>(loc, *concrete, 32);
+                return arith::ConstantIntOp::create(builder, loc, *concrete, 32);
               });
           break;
         case 64:
           synthesizeRuntimeArgument<std::int64_t>(
               builder, argument, args, offset, sizeof(std::int64_t),
               [=](OpBuilder &builder, std::int64_t *concrete) {
-                return builder.create<arith::ConstantIntOp>(loc, *concrete, 64);
+                return arith::ConstantIntOp::create(builder, loc, *concrete, 64);
               });
           break;
         default:
@@ -518,8 +518,7 @@ public:
             cudaq::opt::convertBitsToBytes(type.getIntOrFloatBitWidth()),
             [=](OpBuilder &builder, float *concrete) {
               llvm::APFloat f(*concrete);
-              return builder.create<arith::ConstantFloatOp>(
-                  loc, builder.getF32Type(), f);
+              return arith::ConstantFloatOp::create(builder, loc, builder.getF32Type(), f);
             });
         continue;
       }
@@ -529,8 +528,7 @@ public:
             cudaq::opt::convertBitsToBytes(type.getIntOrFloatBitWidth()),
             [=](OpBuilder &builder, double *concrete) {
               llvm::APFloat f(*concrete);
-              return builder.create<arith::ConstantFloatOp>(
-                  loc, builder.getF64Type(), f);
+              return arith::ConstantFloatOp::create(builder, loc, builder.getF64Type(), f);
             });
         continue;
       }
@@ -544,12 +542,12 @@ public:
             synthesizeRuntimeArgument<cudaq::state *>(
                 builder, argument, args, offset, sizeof(void *),
                 [=](OpBuilder &builder, cudaq::state **concrete) {
-                  Value rawPtr = builder.create<arith::ConstantIntOp>(
-                      loc, reinterpret_cast<std::intptr_t>(*concrete),
+                  Value rawPtr = arith::ConstantIntOp::create(
+                      builder, loc, reinterpret_cast<std::intptr_t>(*concrete),
                       sizeof(void *) * 8);
                   auto stateTy = quake::StateType::get(builder.getContext());
-                  return builder.create<cudaq::cc::CastOp>(
-                      loc, cudaq::cc::PointerType::get(stateTy), rawPtr);
+                  return cudaq::cc::CastOp::create(
+                      builder, loc, cudaq::cc::PointerType::get(stateTy), rawPtr);
                 });
             continue;
           } else {
@@ -699,30 +697,30 @@ public:
         // that can be used in, say, a Pauli op.
         auto ptrTy = cudaq::cc::PointerType::get(charSpanTy);
         auto loc = arguments[idx].getLoc();
-        auto ns = builder.create<arith::ConstantIntOp>(loc, numberSpans, 64);
-        auto aos = builder.create<cudaq::cc::AllocaOp>(loc, charSpanTy, ns);
+        auto ns = arith::ConstantIntOp::create(builder, loc, numberSpans, 64);
+        auto aos = cudaq::cc::AllocaOp::create(builder, loc, charSpanTy, ns);
         auto pi8Ty = cudaq::cc::PointerType::get(charSpanTy.getElementType());
         cudaq::IRBuilder irBuilder(module);
         for (decltype(numberSpans) i = 0; i < numberSpans; ++i) {
           std::size_t length = spanSizes[i];
-          auto strLen = builder.create<arith::ConstantIntOp>(loc, length, 64);
+          auto strLen = arith::ConstantIntOp::create(builder, loc, length, 64);
           StringRef strData{bufferAppendix, length};
           auto global =
               irBuilder.genCStringLiteralAppendNul(loc, module, strData);
-          auto addr = builder.create<cudaq::cc::AddressOfOp>(
-              loc, cudaq::cc::PointerType::get(global.getType()),
+          auto addr = cudaq::cc::AddressOfOp::create(
+              builder, loc, cudaq::cc::PointerType::get(global.getType()),
               global.getName());
-          auto str = builder.create<cudaq::cc::CastOp>(loc, pi8Ty, addr);
-          auto spanp = builder.create<cudaq::cc::ComputePtrOp>(
-              loc, ptrTy, aos,
+          auto str = cudaq::cc::CastOp::create(builder, loc, pi8Ty, addr);
+          auto spanp = cudaq::cc::ComputePtrOp::create(
+              builder, loc, ptrTy, aos,
               ArrayRef<cudaq::cc::ComputePtrArg>{static_cast<std::int32_t>(i)});
-          auto spanData = builder.create<cudaq::cc::StdvecInitOp>(
-              loc, charSpanTy, str, strLen);
-          builder.create<cudaq::cc::StoreOp>(loc, spanData, spanp);
+          auto spanData = cudaq::cc::StdvecInitOp::create(
+              builder, loc, charSpanTy, str, strLen);
+          cudaq::cc::StoreOp::create(builder, loc, spanData, spanp);
           bufferAppendix += length;
         }
         auto svTy = cudaq::cc::StdvecType::get(charSpanTy);
-        auto ics = builder.create<cudaq::cc::StdvecInitOp>(loc, svTy, aos, ns);
+        auto ics = cudaq::cc::StdvecInitOp::create(builder, loc, svTy, aos, ns);
         arguments[idx].replaceAllUsesWith(ics);
         continue;
       }

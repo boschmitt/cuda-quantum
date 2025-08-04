@@ -62,12 +62,12 @@ public:
     if (auto strTy =
             dyn_cast<cudaq::cc::StructType>(allocOp.getElementType())) {
       for (auto mTy : strTy.getMembers())
-        scalars.push_back(rewriter.create<cudaq::cc::AllocaOp>(loc, mTy));
+        scalars.push_back(cudaq::cc::AllocaOp::create(rewriter, loc, mTy));
     } else if (auto arrTy =
                    dyn_cast<cudaq::cc::ArrayType>(allocOp.getElementType())) {
       Type vTy = arrTy.getElementType();
       for (cudaq::cc::ArrayType::SizeType i = 0; i < arrTy.getSize(); ++i)
-        scalars.push_back(rewriter.create<cudaq::cc::AllocaOp>(loc, vTy));
+        scalars.push_back(cudaq::cc::AllocaOp::create(rewriter, loc, vTy));
     }
 
     // Replace the cc.compute_ptr ops with forwarding.
@@ -177,8 +177,8 @@ public:
         args.push_back(off);
       auto loc = insVal.getLoc();
       auto toAddr =
-          rewriter.create<cudaq::cc::ComputePtrOp>(loc, baseTy, dest, args);
-      rewriter.create<cudaq::cc::StoreOp>(loc, v, toAddr);
+          cudaq::cc::ComputePtrOp::create(rewriter, loc, baseTy, dest, args);
+      cudaq::cc::StoreOp::create(rewriter, loc, v, toAddr);
     }
     LLVM_DEBUG(llvm::dbgs() << "updated: " << storeOp << '\n');
     rewriter.eraseOp(storeOp);

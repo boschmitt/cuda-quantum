@@ -157,7 +157,7 @@ public:
             builder.setInsertionPoint(op);
             for (auto createStateOp : usedStates) {
               auto result = cast<quake::CreateStateOp>(createStateOp);
-              builder.create<quake::DeleteStateOp>(loc, result);
+              quake::DeleteStateOp::create(builder, loc, result);
             }
           }
         });

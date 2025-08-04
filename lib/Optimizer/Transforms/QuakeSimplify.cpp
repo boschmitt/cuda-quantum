@@ -278,10 +278,10 @@ public:
         return failure();
       }
       if (qop.isAdj())
-        p = rewriter.create<arith::NegFOp>(loc, ty, p);
+        p = arith::NegFOp::create(rewriter, loc, ty, p);
       if (prev.isAdj())
-        pp = rewriter.create<arith::NegFOp>(loc, ty, pp);
-      newParams.push_back(rewriter.create<arith::AddFOp>(loc, ty, p, pp));
+        pp = arith::NegFOp::create(rewriter, loc, ty, pp);
+      newParams.push_back(arith::AddFOp::create(rewriter, loc, ty, p, pp));
     }
 
     // Combine the two rotations.

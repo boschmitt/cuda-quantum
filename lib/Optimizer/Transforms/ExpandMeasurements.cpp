@@ -133,13 +133,13 @@ public:
     auto loc = resetOp.getLoc();
     auto veqArg = resetOp.getTargets();
     auto i64Ty = rewriter.getI64Type();
-    Value vecSz = rewriter.create<quake::VeqSizeOp>(loc, i64Ty, veqArg);
+    Value vecSz = quake::VeqSizeOp::create(rewriter, loc, i64Ty, veqArg);
     cudaq::opt::factory::createInvariantLoop(
         rewriter, loc, vecSz,
         [&](OpBuilder &builder, Location loc, Region &, Block &block) {
           Value iv = block.getArgument(0);
-          Value qv = builder.create<quake::ExtractRefOp>(loc, veqArg, iv);
-          builder.create<quake::ResetOp>(loc, TypeRange{}, qv);
+          Value qv = quake::ExtractRefOp::create(builder, loc, veqArg, iv);
+          quake::ResetOp::create(builder, loc, TypeRange{}, qv);
         });
     rewriter.eraseOp(resetOp);
     return success();

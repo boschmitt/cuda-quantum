@@ -40,25 +40,24 @@ public:
 
     for (auto negationIter : llvm::enumerate(negations.value()))
       if (negationIter.value())
-        rewriter.create<quake::XOp>(
-            loc, ValueRange(),
-            ValueRange{op.getControls()[negationIter.index()]});
+        quake::XOp::create(rewriter, loc, ValueRange(),
+                           ValueRange{op.getControls()[negationIter.index()]});
 
     if constexpr (std::is_same_v<Op, quake::ExpPauliOp>) {
-      rewriter.create<quake::ExpPauliOp>(
-          loc, TypeRange{}, op.getIsAdjAttr(), op.getParameters(),
-          op.getControls(), op.getTargets(), op.getNegatedQubitControlsAttr(),
-          op.getPauli(), op.getPauliLiteralAttr());
+      quake::ExpPauliOp::create(rewriter, loc, TypeRange{}, op.getIsAdjAttr(),
+                                op.getParameters(), op.getControls(),
+                                op.getTargets(),
+                                op.getNegatedQubitControlsAttr(),
+                                op.getPauli(), op.getPauliLiteralAttr());
     } else {
-      rewriter.create<Op>(loc, op.getIsAdj(), op.getParameters(),
-                          op.getControls(), op.getTargets());
+      Op::create(rewriter, loc, op.getIsAdj(), op.getParameters(),
+                 op.getControls(), op.getTargets());
     }
 
     for (auto negationIter : llvm::enumerate(negations.value()))
       if (negationIter.value())
-        rewriter.create<quake::XOp>(
-            loc, ValueRange(),
-            ValueRange{op.getControls()[negationIter.index()]});
+        quake::XOp::create(rewriter, loc, ValueRange(),
+                           ValueRange{op.getControls()[negationIter.index()]});
     rewriter.eraseOp(op);
 
     return success();

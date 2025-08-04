@@ -312,9 +312,9 @@ public:
   SSAReg reloadMemoryReference(OpBuilder &builder, MemRef mr) {
     if (isa<quake::RefType>(mr.getType())) {
       auto wireTy = quake::WireType::get(builder.getContext());
-      return builder.create<quake::UnwrapOp>(mr.getLoc(), wireTy, mr);
+      return quake::UnwrapOp::create(builder, mr.getLoc(), wireTy, mr);
     }
-    return builder.create<cudaq::cc::LoadOp>(mr.getLoc(), mr);
+    return cudaq::cc::LoadOp::create(builder, mr.getLoc(), mr);
   }
 
   SSAReg unsafeAddLiveInToBlock(Block *block, MemRef mr) {
@@ -523,9 +523,8 @@ public:
     auto wireTy = quake::WireType::get(rewriter.getContext());
     auto opnd = op.getTargets();
     assert(opnd.getType() == quake::RefType::get(rewriter.getContext()));
-    Value target = rewriter.create<quake::UnwrapOp>(loc, wireTy, opnd);
-    auto newOp =
-        rewriter.create<quake::ResetOp>(loc, TypeRange{wireTy}, target);
+    Value target = quake::UnwrapOp::create(rewriter, loc, wireTy, opnd);
+    auto newOp = quake::ResetOp::create(rewriter, loc, TypeRange{wireTy}, target);
     rewriter.replaceOpWithNewOp<quake::WrapOp>(op, newOp.getResult(0), opnd);
     return success();
   }
@@ -541,7 +540,7 @@ public:
     auto wireTy = quake::WireType::get(rewriter.getContext());
     auto opnd = op.getReference();
     assert(isa<quake::RefType>(opnd.getType()));
-    Value target = rewriter.create<quake::UnwrapOp>(loc, wireTy, opnd);
+    Value target = quake::UnwrapOp::create(rewriter, loc, wireTy, opnd);
     rewriter.replaceOpWithNewOp<quake::SinkOp>(op, target);
     return success();
   }
@@ -567,7 +566,7 @@ public:
       for (auto opnd : op.getControls()) {
         auto opndTy = opnd.getType();
         if (opndTy == qrefTy) {
-          auto unwrap = rewriter.create<quake::UnwrapOp>(loc, wireTy, opnd);
+          auto unwrap = quake::UnwrapOp::create(rewriter, loc, wireTy, opnd);
           unwrapCtrls.push_back(unwrap);
         } else {
           unwrapCtrls.push_back(opnd);
@@ -578,7 +577,7 @@ public:
     for (auto opnd : op.getTargets()) {
       auto opndTy = opnd.getType();
       if (opndTy == qrefTy) {
-        auto unwrap = rewriter.create<quake::UnwrapOp>(loc, wireTy, opnd);
+        auto unwrap = quake::UnwrapOp::create(rewriter, loc, wireTy, opnd);
         unwrapTargs.push_back(unwrap);
       } else {
         unwrapTargs.push_back(opnd);
@@ -592,8 +591,8 @@ public:
         auto opndTy = i.value().getType();
         auto offset = i.index() + addend;
         if (opndTy == qrefTy) {
-          rewriter.create<quake::WrapOp>(loc, newOp.getResult(offset),
-                                         i.value());
+          quake::WrapOp::create(rewriter, loc, newOp.getResult(offset),
+                                i.value());
         } else if (opndTy == wireTy) {
           op.getResult(count++).replaceAllUsesWith(newOp.getResult(offset));
         }
@@ -606,8 +605,8 @@ public:
       SmallVector<Type> newTy = {op.getMeasOut().getType()};
       SmallVector<Type> wireTys(unwrapTargs.size(), wireTy);
       newTy.append(wireTys.begin(), wireTys.end());
-      auto newOp = rewriter.create<OP>(loc, newTy, unwrapTargs,
-                                       op.getRegisterNameAttr());
+      auto newOp = OP::create(rewriter, loc, newTy, unwrapTargs,
+                              op.getRegisterNameAttr());
       SmallVector<Value> wireOperands = op.getTargets();
       op.getResult(0).replaceAllUsesWith(newOp.getResult(0));
       threadWires(wireOperands, newOp, 1);
@@ -617,9 +616,9 @@ public:
       // propagated to wrap operations.
       auto numberOfWires = unwrapCtrls.size() + unwrapTargs.size();
       SmallVector<Type> wireTys{numberOfWires, wireTy};
-      auto newOp = rewriter.create<OP>(
-          loc, wireTys, op.getIsAdjAttr(), op.getParameters(), unwrapCtrls,
-          unwrapTargs, op.getNegatedQubitControlsAttr());
+      auto newOp = OP::create(rewriter, loc, wireTys, op.getIsAdjAttr(),
+                              op.getParameters(), unwrapCtrls, unwrapTargs,
+                              op.getNegatedQubitControlsAttr());
       SmallVector<Value> wireOperands = op.getControls();
       wireOperands.append(op.getTargets().begin(), op.getTargets().end());
       threadWires(wireOperands, newOp, 0);
@@ -717,7 +716,7 @@ public:
         elseRegion.push_back(block);
         OpBuilder builder(ctx);
         builder.setInsertionPointToEnd(block);
-        builder.create<cudaq::cc::ContinueOp>(ifOp.getLoc());
+        cudaq::cc::ContinueOp::create(builder, ifOp.getLoc());
       }
     }
 
@@ -745,7 +744,7 @@ public:
               OpBuilder builder(ctx);
               builder.setInsertionPointToStart(block);
               Value v =
-                  builder.create<quake::UnwrapOp>(arg.getLoc(), wireTy, arg);
+                  quake::UnwrapOp::create(builder, arg.getLoc(), wireTy, arg);
               dataFlow.addBinding(block, arg, v);
             }
           }
@@ -769,7 +768,7 @@ public:
               if (!dataFlow.hasBinding(block, alloc)) {
                 OpBuilder builder(alloc);
                 Value v =
-                    builder.create<quake::NullWireOp>(alloc.getLoc(), wireTy);
+                    quake::NullWireOp::create(builder, alloc.getLoc(), wireTy);
                 cleanUps.insert(alloc);
                 dataFlow.addBinding(block, alloc, v);
               }
@@ -778,7 +777,7 @@ public:
               builder.setInsertionPointAfter(op);
               for (auto r : op->getResults()) {
                 Value v =
-                    builder.create<quake::UnwrapOp>(op->getLoc(), wireTy, r);
+                    quake::UnwrapOp::create(builder, op->getLoc(), wireTy, r);
                 dataFlow.addBinding(block, r, v);
               }
             }
@@ -791,8 +790,7 @@ public:
             if (memAnalysis.isMember(alloc)) {
               if (classicalValues && !dataFlow.hasBinding(block, alloc)) {
                 OpBuilder builder(alloc);
-                Value v = builder.create<cudaq::cc::UndefOp>(
-                    alloc.getLoc(), alloc.getElementType());
+                Value v = cudaq::cc::UndefOp::create(builder, alloc.getLoc(), alloc.getElementType());
                 cleanUps.insert(alloc);
                 dataFlow.addBinding(block, alloc, v);
               }
@@ -914,7 +912,7 @@ public:
             if ((v.getType() == qrefTy) && dataFlow.hasBinding(block, v))
               if (auto vBinding = dataFlow.getBinding(block, v)) {
                 OpBuilder builder(op);
-                builder.create<quake::WrapOp>(op->getLoc(), vBinding, v);
+                quake::WrapOp::create(builder, op->getLoc(), vBinding, v);
                 dataFlow.cancelBinding(block, v);
               }
 
@@ -1064,10 +1062,10 @@ public:
       for (auto iter : llvm::enumerate(allDefs)) {
         auto i = iter.index() + parent->getNumResults();
         if (np->getResult(i).getType() == wireTy)
-          builder.create<quake::WrapOp>(np->getLoc(), np->getResult(i),
+          quake::WrapOp::create(builder, np->getLoc(), np->getResult(i),
                                         iter.value());
         else
-          builder.create<cudaq::cc::StoreOp>(np->getLoc(), np->getResult(i),
+          cudaq::cc::StoreOp::create(builder, np->getLoc(), np->getResult(i),
                                              iter.value());
       }
       cleanUps.insert(parent);
