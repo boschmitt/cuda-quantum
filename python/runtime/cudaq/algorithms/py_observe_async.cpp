@@ -12,13 +12,15 @@
 #include "cudaq/algorithms/observe.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include <fmt/core.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/function.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq {
 inline constexpr int defaultShotsValue = -1;
@@ -28,19 +30,19 @@ enum class PyParType { thread, mpi };
 /// @brief Analyze the MLIR Module for the kernel and check for
 /// CUDA-Q specification adherence. Check that the kernel
 /// returns void and does not contain measurements.
-std::tuple<bool, std::string> isValidObserveKernel(py::object &kernel) {
-  if (py::hasattr(kernel, "compile"))
+std::tuple<bool, std::string> isValidObserveKernel(nb::object &kernel) {
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
 
   using namespace mlir;
 
   ModuleOp mod = unwrap(kernelMod);
   func::FuncOp kernelFunc;
   mod.walk([&](func::FuncOp function) {
-    if (function.getName().equals("__nvqpp__mlirgen__" + kernelName)) {
+    if (function.getName() == ("__nvqpp__mlirgen__" + kernelName)) {
       kernelFunc = function;
       return WalkResult::interrupt();
     }
@@ -66,26 +68,26 @@ std::tuple<bool, std::string> isValidObserveKernel(py::object &kernel) {
   return std::make_tuple(true, "");
 }
 
-async_observe_result pyObserveAsync(py::object &kernel,
+async_observe_result pyObserveAsync(nb::object &kernel,
                                     const spin_op &spin_operator,
-                                    py::args &args, std::size_t qpu_id,
+                                    nb::args &args, std::size_t qpu_id,
                                     int shots) {
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelBlockArgs = kernel.attr("arguments");
-  if (py::len(kernelBlockArgs) != args.size())
+  nb::object kernelBlockArgs = kernel.attr("arguments");
+  if (nb::len(kernelBlockArgs) != args.size())
     throw std::runtime_error(
         "Invalid number of arguments passed to observe_async.");
 
   auto &platform = cudaq::get_platform();
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   args = simplifiedValidateInputArguments(args);
   auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
 
   // Launch the asynchronous execution.
-  py::gil_scoped_release release;
+  nb::gil_scoped_release release;
   return details::runObservationAsync(
       [argData, kernelName, kernelMod]() mutable {
         pyAltLaunchKernel(kernelName, kernelMod, *argData, {});
@@ -94,28 +96,28 @@ async_observe_result pyObserveAsync(py::object &kernel,
       spin_operator, platform, shots, kernelName, qpu_id);
 }
 
-async_observe_result pyObserveAsyncWrapper(py::object &kernel,
-                                           py::object &spin_operator_obj,
-                                           py::args &args, std::size_t qpu_id,
+async_observe_result pyObserveAsyncWrapper(nb::object &kernel,
+                                           nb::object &spin_operator_obj,
+                                           nb::args &args, std::size_t qpu_id,
                                            int shots) {
 
   // FIXME(OperatorCpp): Remove this when the operator class is implemented in
   // C++
-  cudaq::spin_op spin_operator = [](py::object &obj) -> cudaq::spin_op {
-    if (py::hasattr(obj, "_to_spinop"))
-      return obj.attr("_to_spinop")().cast<cudaq::spin_op>();
-    return obj.cast<cudaq::spin_op>();
+  cudaq::spin_op spin_operator = [](nb::object &obj) -> cudaq::spin_op {
+    if (nb::hasattr(obj, "_to_spinop"))
+      return nb::cast<cudaq::spin_op>(obj.attr("_to_spinop")());
+    return nb::cast<cudaq::spin_op>(obj);
   }(spin_operator_obj);
 
   return pyObserveAsync(kernel, spin_operator, args, qpu_id, shots);
 }
 
 /// @brief Run `cudaq::observe` on the provided kernel and spin operator.
-observe_result pyObservePar(const PyParType &type, py::object &kernel,
-                            spin_op &spin_operator, py::args args = {},
+observe_result pyObservePar(const PyParType &type, nb::object &kernel,
+                            spin_op &spin_operator, nb::args args = {},
                             int shots = defaultShotsValue,
                             std::optional<noise_model> noise = std::nullopt) {
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
   // Ensure the user input is correct.
@@ -129,7 +131,7 @@ observe_result pyObservePar(const PyParType &type, py::object &kernel,
   if (noise)
     TODO("Handle Noise Models with python parallel distribution.");
 
-  auto name = kernel.attr("name").cast<std::string>();
+  auto name = nb::cast<std::string>(kernel.attr("name"));
   auto nQpus = platform.num_qpus();
   if (type == PyParType::thread) {
     // Does this platform expose more than 1 QPU
@@ -173,24 +175,24 @@ observe_result pyObservePar(const PyParType &type, py::object &kernel,
   return observe_result(globalExpVal, spin_operator);
 }
 
-void bindObserveAsync(py::module &mod) {
+void bindObserveAsync(nb::module_ &mod) {
   auto parallelSubmodule = mod.def_submodule("parallel");
-  py::class_<cudaq::parallel::mpi>(
+  nb::class_<cudaq::parallel::mpi>(
       parallelSubmodule, "mpi",
       "Type indicating that the :func:`observe` function should distribute its "
       "expectation value computations accross available MPI ranks and GPUs for "
       "each term.");
-  py::class_<cudaq::parallel::thread>(
+  nb::class_<cudaq::parallel::thread>(
       parallelSubmodule, "thread",
       "Type indicating that the :func:`observe` function should distribute its "
       "term "
       "expectation value computations across available GPUs via standard C++ "
       "threads.");
 
-  mod.def("observe_async", &pyObserveAsyncWrapper, py::arg("kernel"),
-          py::arg("spin_operator"), py::kw_only(),
-          py::arg("qpu_id") = defaultQpuIdValue,
-          py::arg("shots_count") = defaultShotsValue,
+  mod.def("observe_async", &pyObserveAsyncWrapper, nb::arg("kernel"),
+          nb::arg("spin_operator"), nb::arg("args"), nb::kw_only(),
+          nb::arg("qpu_id") = defaultQpuIdValue,
+          nb::arg("shots_count") = defaultShotsValue,
           R"#(Compute the expected value of the `spin_operator` with respect to 
 the `kernel` asynchronously. If the kernel accepts arguments, it will 
 be evaluated with respect to `kernel(*arguments)`. When targeting a
@@ -218,41 +220,41 @@ Returns:
 
   mod.def(
       "observe_parallel",
-      [&](py::object kernel, spin_op &spin_operator, py::args arguments,
-          int shots, py::type execution,
+      [&](nb::object kernel, spin_op &spin_operator, nb::args arguments,
+          int shots, nb::type_object execution,
           std::optional<noise_model> noise) -> observe_result {
         // Observe can be a single observe call, a parallel observe call,
         // or a observe broadcast. We'll handle them all here.
 
         using ObserveApplicator = std::function<std::vector<observe_result>(
-            py::object &, spin_op &, py::args &, int,
+            nb::object &, spin_op &, nb::args &, int,
             std::optional<noise_model>)>;
 
         std::unordered_map<std::string, ObserveApplicator> applicator{
             {"thread",
-             [](py::object &kernel, spin_op &spin_operator, py::args arguments,
+             [](nb::object &kernel, spin_op &spin_operator, nb::args arguments,
                 int shots, std::optional<noise_model> noise) {
                return std::vector<observe_result>{
                    pyObservePar(PyParType::thread, kernel, spin_operator,
                                 arguments, shots, noise)};
              }},
             {"mpi",
-             [](py::object &kernel, spin_op &spin_operator, py::args arguments,
+             [](nb::object &kernel, spin_op &spin_operator, nb::args arguments,
                 int shots, std::optional<noise_model> noise) {
                return std::vector<observe_result>{
                    pyObservePar(PyParType::mpi, kernel, spin_operator,
                                 arguments, shots, noise)};
              }}};
 
-        std::string applicatorKey = py::str(execution.attr("__name__"));
+        std::string applicatorKey = nb::cast<std::string>(execution.attr("__name__"));
 
         // Run the observation task
         return applicator[applicatorKey](kernel, spin_operator, arguments,
                                          shots, noise)[0];
       },
-      py::arg("kernel"), py::arg("spin_operator"), py::kw_only(),
-      py::arg("shots_count") = defaultShotsValue, py::arg("execution"),
-      py::arg("noise_model") = py::none(),
+      nb::arg("kernel"), nb::arg("spin_operator"), nb::arg("args"), nb::kw_only(),
+      nb::arg("shots_count") = defaultShotsValue, nb::arg("execution"),
+      nb::arg("noise_model") = nb::none(),
       R"#(Compute the expected value of the `spin_operator` with respect to 
 the `kernel`. If the input `spin_operator` is a list of `SpinOperator` then compute 
 the expected value of every operator in the list and return a list of results.

@@ -45,18 +45,19 @@
 #include "runtime/mlir/py_register_dialects.h"
 #include "utils/LinkedLibraryHolder.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
+#include "mlir/Bindings/Python/NanobindAdaptors.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include <pybind11/complex.h>
-#include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/map.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 static std::unique_ptr<cudaq::LinkedLibraryHolder> holder;
 
-PYBIND11_MODULE(_quakeDialects, m) {
+NB_MODULE(_quakeDialects, m) {
   holder = std::make_unique<cudaq::LinkedLibraryHolder>();
 
   cudaq::bindRegisterDialects(m);
@@ -72,25 +73,25 @@ PYBIND11_MODULE(_quakeDialects, m) {
       "kernel_builder and ast_bridge when created new MLIR Contexts.");
   cudaqRuntime.def(
       "initialize_cudaq",
-      [&](py::kwargs kwargs) {
+      [&](nb::kwargs kwargs) {
         cudaq::info("Calling initialize_cudaq.");
         if (!kwargs)
           return;
 
         std::map<std::string, std::string> extraConfig;
-        for (auto &[keyPy, valuePy] : kwargs) {
-          std::string key = py::str(keyPy);
+        for (auto [keyPy, valuePy] : kwargs) {
+          std::string key = nb::cast<std::string>(nb::str(keyPy));
           if (key == "emulate") {
             extraConfig.insert({"emulate", "true"});
           }
           if (key == "option") {
-            extraConfig.insert({"option", py::str(valuePy)});
+            extraConfig.insert({"option", nb::cast<std::string>(nb::str(valuePy))});
           }
         }
 
-        for (auto &[keyPy, valuePy] : kwargs) {
-          std::string key = py::str(keyPy);
-          std::string value = py::str(valuePy);
+        for (auto [keyPy, valuePy] : kwargs) {
+          std::string key = nb::cast<std::string>(nb::str(keyPy));
+          std::string value = nb::cast<std::string>(nb::str(valuePy));
           cudaq::info("Processing Python Arg: {} - {}", key, value);
           if (key == "target")
             holder->setTarget(value, extraConfig);
@@ -197,42 +198,40 @@ PYBIND11_MODULE(_quakeDialects, m) {
   auto orcaSubmodule = cudaqRuntime.def_submodule("orca");
   orcaSubmodule.def(
       "sample",
-      py::overload_cast<std::vector<std::size_t> &, std::vector<std::size_t> &,
+      static_cast<cudaq::sample_result (*)(std::vector<std::size_t> &, std::vector<std::size_t> &,
                         std::vector<double> &, std::vector<double> &, int,
-                        std::size_t>(&cudaq::orca::sample),
+                        std::size_t)>(&cudaq::orca::sample),
       "Performs Time Bin Interferometer (TBI) boson sampling experiments on "
       "ORCA's backends",
-      py::arg("input_state"), py::arg("loop_lengths"), py::arg("bs_angles"),
-      py::arg("ps_angles"), py::arg("n_samples") = 10000,
-      py::arg("qpu_id") = 0);
+      nb::arg("input_state"), nb::arg("loop_lengths"), nb::arg("bs_angles"),
+      nb::arg("ps_angles"), nb::arg("n_samples") = 10000,
+      nb::arg("qpu_id") = 0);
   orcaSubmodule.def(
       "sample",
-      py::overload_cast<std::vector<std::size_t> &, std::vector<std::size_t> &,
-                        std::vector<double> &, int, std::size_t>(
-          &cudaq::orca::sample),
+      static_cast<cudaq::sample_result (*)(std::vector<std::size_t> &, std::vector<std::size_t> &,
+                        std::vector<double> &, int, std::size_t)>(&cudaq::orca::sample),
       "Performs Time Bin Interferometer (TBI) boson sampling experiments on "
       "ORCA's backends",
-      py::arg("input_state"), py::arg("loop_lengths"), py::arg("bs_angles"),
-      py::arg("n_samples") = 10000, py::arg("qpu_id") = 0);
+      nb::arg("input_state"), nb::arg("loop_lengths"), nb::arg("bs_angles"),
+      nb::arg("n_samples") = 10000, nb::arg("qpu_id") = 0);
   orcaSubmodule.def(
       "sample_async",
-      py::overload_cast<std::vector<std::size_t> &, std::vector<std::size_t> &,
+      static_cast<cudaq::orca::async_sample_result (*)(std::vector<std::size_t> &, std::vector<std::size_t> &,
                         std::vector<double> &, std::vector<double> &, int,
-                        std::size_t>(&cudaq::orca::sample_async),
+                        std::size_t)>(&cudaq::orca::sample_async),
       "Performs Time Bin Interferometer (TBI) boson sampling experiments on "
       "ORCA's backends",
-      py::arg("input_state"), py::arg("loop_lengths"), py::arg("bs_angles"),
-      py::arg("ps_angles"), py::arg("n_samples") = 10000,
-      py::arg("qpu_id") = 0);
+      nb::arg("input_state"), nb::arg("loop_lengths"), nb::arg("bs_angles"),
+      nb::arg("ps_angles"), nb::arg("n_samples") = 10000,
+      nb::arg("qpu_id") = 0);
   orcaSubmodule.def(
       "sample_async",
-      py::overload_cast<std::vector<std::size_t> &, std::vector<std::size_t> &,
-                        std::vector<double> &, int, std::size_t>(
-          &cudaq::orca::sample_async),
+      static_cast<cudaq::orca::async_sample_result (*)(std::vector<std::size_t> &, std::vector<std::size_t> &,
+                        std::vector<double> &, int, std::size_t)>(&cudaq::orca::sample_async),
       "Performs Time Bin Interferometer (TBI) boson sampling experiments on "
       "ORCA's backends",
-      py::arg("input_state"), py::arg("loop_lengths"), py::arg("bs_angles"),
-      py::arg("n_samples") = 10000, py::arg("qpu_id") = 0);
+      nb::arg("input_state"), nb::arg("loop_lengths"), nb::arg("bs_angles"),
+      nb::arg("n_samples") = 10000, nb::arg("qpu_id") = 0);
 
   auto photonicsSubmodule = cudaqRuntime.def_submodule("photonics");
   photonicsSubmodule.def(
@@ -240,7 +239,7 @@ PYBIND11_MODULE(_quakeDialects, m) {
       [](std::size_t &level) {
         return cudaq::getExecutionManager()->allocateQudit(level);
       },
-      "Allocate a qudit of given level.", py::arg("level"));
+      "Allocate a qudit of given level.", nb::arg("level"));
   photonicsSubmodule.def(
       "apply_operation",
       [](const std::string &name, std::vector<double> &params,
@@ -255,21 +254,21 @@ PYBIND11_MODULE(_quakeDialects, m) {
                                             cudaq::spin_op::identity());
       },
       "Apply the input photonics operation on the target qudits.",
-      py::arg("name"), py::arg("params"), py::arg("targets"));
+      nb::arg("name"), nb::arg("params"), nb::arg("targets"));
   photonicsSubmodule.def(
       "measure",
       [](std::size_t level, std::size_t id, const std::string &regName) {
         return cudaq::getExecutionManager()->measure(
             cudaq::QuditInfo(level, id), regName);
       },
-      "Measure the input qudit(s).", py::arg("level"), py::arg("qudit"),
-      py::arg("register_name") = "");
+      "Measure the input qudit(s).", nb::arg("level"), nb::arg("qudit"),
+      nb::arg("register_name") = "");
   photonicsSubmodule.def(
       "release_qudit",
       [](std::size_t level, std::size_t id) {
         cudaq::getExecutionManager()->returnQudit(cudaq::QuditInfo(level, id));
       },
-      "Release a qudit of given id.", py::arg("level"), py::arg("id"));
+      "Release a qudit of given id.", nb::arg("level"), nb::arg("id"));
   cudaqRuntime.def("cloneModule",
                    [](MlirModule mod) { return wrap(unwrap(mod).clone()); });
   cudaqRuntime.def("isTerminator", [](MlirOperation op) {

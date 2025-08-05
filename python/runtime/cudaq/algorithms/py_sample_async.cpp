@@ -10,13 +10,13 @@
 #include "cudaq/utils/registry.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include <fmt/core.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq {
 std::string get_quake_by_name(const std::string &, bool,
@@ -25,7 +25,7 @@ std::string get_quake_by_name(const std::string &, bool,
 void pyAltLaunchKernel(const std::string &, MlirModule, OpaqueArguments &,
                        const std::vector<std::string> &);
 
-void bindSampleAsync(py::module &mod) {
+void bindSampleAsync(nb::module_ &mod) {
   // Async. result wrapper for Python kernels, which also holds the Python MLIR
   // context.
   //
@@ -41,14 +41,14 @@ void bindSampleAsync(py::module &mod) {
   class py_async_sample_result : public async_sample_result {
   public:
     // Ctors
-    py_async_sample_result(async_sample_result &&res, py::object &&mlirCtx)
+    py_async_sample_result(async_sample_result &&res, nb::object &&mlirCtx)
         : async_sample_result(std::move(res)), ctx(std::move(mlirCtx)){};
 
   private:
-    py::object ctx;
+    nb::object ctx;
   };
 
-  py::class_<async_sample_result, py_async_sample_result>(
+  nb::class_<async_sample_result, py_async_sample_result>(
       mod, "AsyncSampleResult",
       R"#(A data-type containing the results of a call to :func:`sample_async`. 
 The `AsyncSampleResult` models a future-like type, whose 
@@ -56,14 +56,14 @@ The `AsyncSampleResult` models a future-like type, whose
 kicks off a wait on the current thread until the results are available.
 See `future <https://en.cppreference.com/w/cpp/thread/future>`_ 
 for more information on this programming pattern.)#")
-      .def(py::init([](std::string inJson) {
+      .def("__init__", [](async_sample_result *self, std::string inJson) {
         async_sample_result f;
         std::istringstream is(inJson);
         is >> f;
-        return f;
-      }))
+        new (self) async_sample_result(std::move(f));
+      })
       .def("get", &async_sample_result::get,
-           py::call_guard<py::gil_scoped_release>(),
+           nb::call_guard<nb::gil_scoped_release>(),
            "Return the :class:`SampleResult` from the asynchronous sample "
            "execution.\n")
       .def("__str__", [](async_sample_result &res) {
@@ -74,17 +74,17 @@ for more information on this programming pattern.)#")
 
   mod.def(
       "sample_async",
-      [&](py::object kernel, py::args args, std::size_t shots,
+      [&](nb::object kernel, nb::args args, std::size_t shots,
           bool explicitMeasurements, std::size_t qpu_id) {
         auto &platform = cudaq::get_platform();
-        if (py::hasattr(kernel, "compile"))
+        if (nb::hasattr(kernel, "compile"))
           kernel.attr("compile")();
-        auto kernelName = kernel.attr("name").cast<std::string>();
+        auto kernelName = nb::cast<std::string>(kernel.attr("name"));
         // Clone the kernel module
         auto kernelMod = mlirModuleFromOperation(
-            wrap(unwrap(kernel.attr("module").cast<MlirModule>())->clone()));
+            wrap(unwrap(nb::cast<MlirModule>(kernel.attr("module")))->clone()));
         // Get the MLIR context associated with the kernel
-        py::object mlirCtx = kernel.attr("module").attr("context");
+        nb::object mlirCtx = kernel.attr("module").attr("context");
         args = simplifiedValidateInputArguments(args);
 
         // This kernel may not have been registered to the quake registry
@@ -112,7 +112,7 @@ for more information on this programming pattern.)#")
             toOpaqueArgs(args, kernelMod, kernelName));
 
         // Should only have C++ going on here, safe to release the GIL
-        py::gil_scoped_release release;
+        nb::gil_scoped_release release;
         return py_async_sample_result(
             cudaq::details::runSamplingAsync(
                 // Notes:
@@ -127,8 +127,8 @@ for more information on this programming pattern.)#")
                 platform, kernelName, shots, explicitMeasurements, qpu_id),
             std::move(mlirCtx));
       },
-      py::arg("kernel"), py::kw_only(), py::arg("shots_count") = 1000,
-      py::arg("explicit_measurements") = false, py::arg("qpu_id") = 0,
+      nb::arg("kernel"), nb::arg("args"), nb::kw_only(), nb::arg("shots_count") = 1000,
+      nb::arg("explicit_measurements") = false, nb::arg("qpu_id") = 0,
       R"#(Asynchronously sample the state of the provided `kernel` at the 
 specified number of circuit executions (`shots_count`).
 When targeting a quantum platform with more than one QPU, the optional

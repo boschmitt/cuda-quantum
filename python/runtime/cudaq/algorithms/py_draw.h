@@ -9,16 +9,15 @@
 #pragma once
 
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq {
-void bindPyDraw(py::module &mod);
+void bindPyDraw(nb::module_ &mod);
 
 namespace details {
 std::tuple<std::string, MlirModule, OpaqueArguments *>
-getKernelLaunchParameters(py::object &kernel, py::args args);
+getKernelLaunchParameters(nb::object &kernel, nb::args args);
 } // namespace details
 } // namespace cudaq

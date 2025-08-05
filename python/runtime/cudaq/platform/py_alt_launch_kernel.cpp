@@ -28,12 +28,11 @@
 #include "runtime/cudaq/algorithms/py_utils.h"
 #include "utils/OpaqueArguments.h"
 #include "utils/PyTypes.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Target/TargetMachine.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
+#include "llvm/TargetParser/Host.h"
+#include "mlir/Bindings/Python/NanobindAdaptors.h"
 #include "mlir/CAPI/ExecutionEngine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
@@ -43,10 +42,11 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
 #include <fmt/core.h>
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 using namespace mlir;
 
 namespace cudaq {
@@ -85,11 +85,9 @@ static std::string createDataLayout() {
 
   std::string cpu(llvm::sys::getHostCPUName());
   llvm::SubtargetFeatures features;
-  llvm::StringMap<bool> hostFeatures;
-
-  if (llvm::sys::getHostCPUFeatures(hostFeatures))
-    for (auto &f : hostFeatures)
-      features.AddFeature(f.first(), f.second);
+  llvm::StringMap<bool> hostFeatures = llvm::sys::getHostCPUFeatures();
+  for (auto &f : hostFeatures)
+    features.AddFeature(f.first(), f.second);
 
   std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
       targetTriple, cpu, features.getString(), {}, {}));
@@ -110,14 +108,14 @@ void setDataLayout(MlirModule module) {
 
 /// @brief Create a new OpaqueArguments pointer and pack the python arguments
 /// in it. Clients must delete the memory.
-OpaqueArguments *toOpaqueArgs(py::args &args, MlirModule mod,
+OpaqueArguments *toOpaqueArgs(nb::args &args, MlirModule mod,
                               const std::string &name) {
   auto kernelFunc = getKernelFuncOp(mod, name);
   auto *argData = new cudaq::OpaqueArguments();
   args = simplifiedValidateInputArguments(args);
   setDataLayout(mod);
   cudaq::packArgs(*argData, args, kernelFunc,
-                  [](OpaqueArguments &, py::object &) { return false; });
+                                      [](OpaqueArguments &, nb::object &) { return false; });
   return argData;
 }
 
@@ -190,18 +188,29 @@ ExecutionEngine *jitKernel(const std::string &name, MlirModule module,
     opts.enableGDBNotificationListener = false;
     opts.enablePerfNotificationListener = false;
     opts.transformer = [](llvm::Module *m) { return llvm::ErrorSuccess(); };
-    opts.jitCodeGenOptLevel = llvm::CodeGenOpt::None;
+    opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::None;
     SmallVector<StringRef, 4> sharedLibs;
     opts.llvmModuleBuilder =
         [](Operation *module,
            llvm::LLVMContext &llvmContext) -> std::unique_ptr<llvm::Module> {
-      llvmContext.setOpaquePointers(false);
       auto llvmModule = translateModuleToLLVMIR(module, llvmContext);
       if (!llvmModule) {
         llvm::errs() << "Failed to emit LLVM IR\n";
         return nullptr;
       }
-      ExecutionEngine::setupTargetTriple(llvmModule.get());
+      // Create target machine and configure the LLVM Module
+      auto tmBuilderOrError = llvm::orc::JITTargetMachineBuilder::detectHost();
+      if (!tmBuilderOrError) {
+        llvm::errs() << "Could not create JITTargetMachineBuilder\n";
+        return nullptr;
+      }
+      auto tmOrError = tmBuilderOrError->createTargetMachine();
+      if (!tmOrError) {
+        llvm::errs() << "Could not create TargetMachine\n";
+        return nullptr;
+      }
+      mlir::ExecutionEngine::setupTargetTripleAndDataLayout(llvmModule.get(),
+                                                            tmOrError.get().get());
       return llvmModule;
     };
 
@@ -247,11 +256,10 @@ jitAndCreateArgs(const std::string &name, MlirModule module,
           });
         })
         .Case([&](ComplexType type) {
-          Py_complex *ourAllocatedArg = new Py_complex();
-          ourAllocatedArg->real = 0.0;
-          ourAllocatedArg->imag = 0.0;
+          std::complex<double> *ourAllocatedArg = new std::complex<double>();
+          *ourAllocatedArg = std::complex<double>(0.0, 0.0);
           runtimeArgs.emplace_back(ourAllocatedArg, [](void *ptr) {
-            delete static_cast<Py_complex *>(ptr);
+            delete static_cast<std::complex<double> *>(ptr);
           });
         })
         .Case([&](Float64Type type) {
@@ -553,7 +561,7 @@ void *pyGetKernelArgs(const std::string &name, MlirModule module,
 }
 
 template <typename T>
-py::object readPyObject(mlir::Type ty, char *arg) {
+nb::object readPyObject(mlir::Type ty, char *arg) {
   unsigned int bytes = byteSize(ty);
   if (sizeof(T) != bytes) {
     ty.dump();
@@ -564,16 +572,16 @@ py::object readPyObject(mlir::Type ty, char *arg) {
   }
   T concrete;
   std::memcpy(&concrete, arg, bytes);
-  return py_ext::convert<T>(concrete);
+  return nb::cast(concrete);
 }
 
 /// @brief Convert raw return of kernel to python object.
-py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
+nb::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
                          mlir::Type ty, char *data) {
   auto isRunContext = module->hasAttr(runtime::enableCudaqRun);
 
-  return llvm::TypeSwitch<mlir::Type, py::object>(ty)
-      .Case([&](IntegerType ty) -> py::object {
+  return llvm::TypeSwitch<mlir::Type, nb::object>(ty)
+      .Case([&](IntegerType ty) -> nb::object {
         if (ty.getIntOrFloatBitWidth() == 1)
           return readPyObject<bool>(ty, data);
         if (ty.getIntOrFloatBitWidth() == 8)
@@ -584,28 +592,28 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
           return readPyObject<std::int32_t>(ty, data);
         return readPyObject<std::int64_t>(ty, data);
       })
-      .Case([&](mlir::ComplexType ty) -> py::object {
+      .Case([&](mlir::ComplexType ty) -> nb::object {
         auto eleTy = ty.getElementType();
-        return llvm::TypeSwitch<mlir::Type, py::object>(eleTy)
-            .Case([&](mlir::Float64Type eTy) -> py::object {
+        return llvm::TypeSwitch<mlir::Type, nb::object>(eleTy)
+            .Case([&](mlir::Float64Type eTy) -> nb::object {
               return readPyObject<std::complex<double>>(ty, data);
             })
-            .Case([&](mlir::Float32Type eTy) -> py::object {
+            .Case([&](mlir::Float32Type eTy) -> nb::object {
               return readPyObject<std::complex<float>>(ty, data);
             })
-            .Default([](mlir::Type eTy) -> py::object {
+            .Default([](mlir::Type eTy) -> nb::object {
               eTy.dump();
               throw std::runtime_error(
                   "Unsupported float element type for complex type return.");
             });
       })
-      .Case([&](Float64Type ty) -> py::object {
+      .Case([&](Float64Type ty) -> nb::object {
         return readPyObject<double>(ty, data);
       })
-      .Case([&](Float32Type ty) -> py::object {
+      .Case([&](Float32Type ty) -> nb::object {
         return readPyObject<float>(ty, data);
       })
-      .Case([&](cudaq::cc::StdvecType ty) -> py::object {
+      .Case([&](cudaq::cc::StdvecType ty) -> nb::object {
         if (isRunContext) {
           // cudaq.run return.
           auto eleTy = ty.getElementType();
@@ -615,9 +623,9 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
           // Read the vector and create a list of booleans.
           if (eleTy.getIntOrFloatBitWidth() == 1) {
             auto v = reinterpret_cast<std::vector<bool> *>(data);
-            py::list list;
+            nb::list list;
             for (auto const bit : *v)
-              list.append(py::bool_(bit));
+              list.append(nb::bool_(bit));
             return list;
           }
 
@@ -631,7 +639,7 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
           auto v = reinterpret_cast<vec *>(data);
 
           // Read vector elements.
-          py::list list;
+          nb::list list;
           for (char *i = v->begin; i < v->end; i += eleByteSize)
             list.append(convertResult(module, kernelFuncOp, eleTy, i));
           return list;
@@ -650,19 +658,19 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
         auto v = reinterpret_cast<vec *>(data);
 
         // Read vector elements.
-        py::list list;
+        nb::list list;
         std::size_t byteLength = v->length * eleByteSize;
         for (std::size_t i = 0; i < byteLength; i += eleByteSize)
           list.append(convertResult(module, kernelFuncOp, eleTy, v->data + i));
         return list;
       })
-      .Case([&](cudaq::cc::StructType ty) -> py::object {
+      .Case([&](cudaq::cc::StructType ty) -> nb::object {
         auto name = ty.getName().str();
         // Handle tuples.
         if (name == "tuple") {
           auto [size, offsets] = getTargetLayout(kernelFuncOp, ty);
           auto memberTys = ty.getMembers();
-          py::list list;
+          nb::list list;
           for (std::size_t i = 0; i < offsets.size(); i++) {
             auto eleTy = memberTys[i];
             if (!eleTy.isIntOrFloat()) {
@@ -674,7 +682,7 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
             list.append(
                 convertResult(module, kernelFuncOp, eleTy, data + offsets[i]));
           }
-          return py::tuple(list);
+          return nb::tuple(list);
         }
 
         // Handle data class objects.
@@ -685,14 +693,14 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
         auto [cls, attributes] = DataClassRegistry::getClassAttributes(name);
 
         // Collect field names.
-        std::vector<py::str> fieldNames;
+        std::vector<nb::str> fieldNames;
         for (const auto &[attr_name, unused] : attributes)
-          fieldNames.emplace_back(py::str(attr_name));
+          fieldNames.emplace_back(nb::str(attr_name));
 
         // Read field values and create the constructor `kwargs`
         auto [size, offsets] = getTargetLayout(kernelFuncOp, ty);
         auto memberTys = ty.getMembers();
-        py::dict kwargs;
+        nb::dict kwargs;
         for (std::size_t i = 0; i < offsets.size(); i++) {
           auto eleTy = memberTys[i];
           if (!eleTy.isIntOrFloat()) {
@@ -713,13 +721,13 @@ py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
         // Create python object of class `cls` with the collected args.
         return cls(**kwargs);
       })
-      .Default([](Type ty) -> py::object {
+      .Default([](Type ty) -> nb::object {
         ty.dump();
         throw std::runtime_error("Unsupported return type.");
       });
 }
 
-py::object pyAltLaunchKernelR(const std::string &name, MlirModule module,
+nb::object pyAltLaunchKernelR(const std::string &name, MlirModule module,
                               MlirType returnType,
                               cudaq::OpaqueArguments &runtimeArgs,
                               const std::vector<std::string> &names) {
@@ -848,7 +856,6 @@ std::string getQIR(const std::string &name, MlirModule module,
   std::free(rawArgs);
 
   llvm::LLVMContext llvmContext;
-  llvmContext.setOpaquePointers(false);
   auto llvmModule = translateModuleToLLVMIR(cloned, llvmContext);
   auto optPipeline = cudaq::makeOptimizingTransformer(
       /*optLevel=*/3, /*sizeLevel=*/0,
@@ -927,12 +934,12 @@ std::string getASM(const std::string &name, MlirModule module,
   return str;
 }
 
-void bindAltLaunchKernel(py::module &mod) {
+void bindAltLaunchKernel(nb::module_ &mod) {
   jitCache = std::make_unique<JITExecutionCache>();
 
   auto callableArgHandler = [](cudaq::OpaqueArguments &argData,
-                               py::object &arg) {
-    if (py::hasattr(arg, "module")) {
+                               nb::object &arg) {
+    if (nb::hasattr(arg, "module")) {
       // Just give it some dummy data that will not be used.
       // We synthesize away all callables, the block argument
       // remains but it is not used, so just give argsCreator
@@ -948,7 +955,7 @@ void bindAltLaunchKernel(py::module &mod) {
   mod.def(
       "pyAltLaunchKernel",
       [&](const std::string &kernelName, MlirModule module,
-          py::args runtimeArgs, std::vector<std::string> callable_names) {
+          nb::args runtimeArgs, std::vector<std::string> callable_names) {
         auto kernelFunc = getKernelFuncOp(module, kernelName);
 
         cudaq::OpaqueArguments args;
@@ -956,13 +963,13 @@ void bindAltLaunchKernel(py::module &mod) {
         cudaq::packArgs(args, runtimeArgs, kernelFunc, callableArgHandler);
         pyAltLaunchKernel(kernelName, module, args, callable_names);
       },
-      py::arg("kernelName"), py::arg("module"), py::kw_only(),
-      py::arg("callable_names") = std::vector<std::string>{}, "DOC STRING");
+      nb::arg("kernelName"), nb::arg("module"), nb::arg("runtimeArgs"), nb::kw_only(),
+      nb::arg("callable_names") = std::vector<std::string>{}, "DOC STRING");
 
   mod.def(
       "pyAltLaunchKernelR",
       [&](const std::string &kernelName, MlirModule module, MlirType returnType,
-          py::args runtimeArgs, std::vector<std::string> callable_names) {
+          nb::args runtimeArgs, std::vector<std::string> callable_names) {
         auto kernelFunc = getKernelFuncOp(module, kernelName);
 
         cudaq::OpaqueArguments args;
@@ -971,8 +978,8 @@ void bindAltLaunchKernel(py::module &mod) {
         return pyAltLaunchKernelR(kernelName, module, returnType, args,
                                   callable_names);
       },
-      py::arg("kernelName"), py::arg("module"), py::arg("returnType"),
-      py::kw_only(), py::arg("callable_names") = std::vector<std::string>{},
+      nb::arg("kernelName"), nb::arg("module"), nb::arg("returnType"),
+      nb::arg("runtimeArgs"), nb::kw_only(), nb::arg("callable_names") = std::vector<std::string>{},
       "DOC STRING");
 
   mod.def(
@@ -980,43 +987,61 @@ void bindAltLaunchKernel(py::module &mod) {
       [&](const std::string &name, std::string &programArgs) {
         return pyAltLaunchAnalogKernel(name, programArgs);
       },
-      py::arg("name"), py::arg("programArgs"),
+      nb::arg("name"), nb::arg("programArgs"),
       "Launch an analog Hamiltonian simulation kernel with given JSON "
       "payload.");
 
-  mod.def("synthesize", [](py::object kernel, py::args runtimeArgs) {
-    MlirModule module = kernel.attr("module").cast<MlirModule>();
-    auto name = kernel.attr("name").cast<std::string>();
+  mod.def("synthesize", [](nb::object kernel, nb::args runtimeArgs) {
+    MlirModule module = nb::cast<MlirModule>(kernel.attr("module"));
+    auto name = nb::cast<std::string>(kernel.attr("name"));
     auto kernelFuncOp = getKernelFuncOp(module, name);
     cudaq::OpaqueArguments args;
     setDataLayout(module);
     cudaq::packArgs(args, runtimeArgs, kernelFuncOp,
-                    [](OpaqueArguments &, py::object &) { return false; });
+                    [](OpaqueArguments &, nb::object &) { return false; });
     return synthesizeKernel(name, module, args);
   });
 
   mod.def(
       "get_qir",
-      [](py::object kernel, std::string profile) {
+      [](nb::object kernel, std::string profile) {
         PyErr_WarnEx(PyExc_DeprecationWarning,
                      "to_qir()/get_qir() is deprecated, use translate() "
                      "with `format=\"qir\"`.",
                      1);
 
-        if (py::hasattr(kernel, "compile"))
+        if (nb::hasattr(kernel, "compile"))
           kernel.attr("compile")();
-        MlirModule module = kernel.attr("module").cast<MlirModule>();
-        auto name = kernel.attr("name").cast<std::string>();
+        MlirModule module = nb::cast<MlirModule>(kernel.attr("module"));
+        auto name = nb::cast<std::string>(kernel.attr("name"));
         cudaq::OpaqueArguments args;
         return getQIR(name, module, args, profile);
       },
-      py::arg("kernel"), py::kw_only(), py::arg("profile") = "");
+      nb::arg("kernel"), nb::kw_only(), nb::arg("profile") = "");
 
   mod.def(
       "storePointerToStateData",
-      [](const std::string &name, const std::string &hash, py::buffer data,
+      [](const std::string &name, const std::string &hash, nb::object data,
          simulation_precision precision) {
-        auto ptr = data.request().ptr;
+        // Handle buffer objects - could be numpy arrays or other buffer types
+        void *ptr = nullptr;
+        if (nb::hasattr(data, "__array_interface__")) {
+          // NumPy array - use array interface
+          auto interface = data.attr("__array_interface__");
+          auto data_tuple = nb::cast<nb::tuple>(interface["data"]);
+          ptr = reinterpret_cast<void*>(nb::cast<std::uintptr_t>(data_tuple[0]));
+        } else {
+          // Try to get the data pointer directly for other array types
+          if (nb::hasattr(data, "data")) {
+            auto data_attr = data.attr("data");
+            if (nb::hasattr(data_attr, "ptr")) {
+              ptr = reinterpret_cast<void*>(nb::cast<std::uintptr_t>(data_attr.attr("ptr")));
+            }
+          }
+        }
+        if (!ptr) {
+          throw std::runtime_error("Could not extract data pointer from buffer object");
+        }
         stateStorage->insert({hash, PyStateVectorData{ptr, precision, name}});
       },
       "Store qalloc state initialization array data.");
@@ -1038,8 +1063,8 @@ void bindAltLaunchKernel(py::module &mod) {
 
   mod.def(
       "storePointerToCudaqState",
-      [](const std::string &name, const std::string &hash, py::object data) {
-        auto state = data.cast<cudaq::state>();
+      [](const std::string &name, const std::string &hash, nb::object data) {
+        auto state = nb::cast<cudaq::state>(data);
         cudaqStateStorage->insert({hash, PyStateData{state, name}});
       },
       "Store qalloc state initialization states.");
@@ -1117,7 +1142,7 @@ void bindAltLaunchKernel(py::module &mod) {
               "cudaq::builder failed to get kernelReg function.");
         }
 
-        return py::capsule(*funcPtr);
+        return nb::capsule(*funcPtr);
       },
       "JIT compile and return the C function pointer for the FuncOp of given "
       "name.");

@@ -6,8 +6,9 @@
  * the terms of the Apache License 2.0 which accompanies this distribution.    *
  ******************************************************************************/
 
-#include <pybind11/functional.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
 #include "common/ArgumentWrapper.h"
 #include "common/JsonConvert.h"
@@ -19,7 +20,6 @@
 #include "py_vqe.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
@@ -35,7 +35,7 @@ mlir::func::FuncOp getKernelFuncOp(mlir::ModuleOp &mod,
                                    const std::string &kernelName) {
   mlir::func::FuncOp kernel;
   mod.walk([&](mlir::func::FuncOp func) {
-    if (func.getName().equals("__nvqpp__mlirgen__" + kernelName))
+    if (func.getName() == ("__nvqpp__mlirgen__" + kernelName))
       kernel = func;
     return mlir::WalkResult::advance();
   });
@@ -63,17 +63,17 @@ bool isArgumentStdVec(MlirModule &module, const std::string &kernelName,
 
 /// @brief Return the kernel name and MLIR module for a kernel.
 static inline std::pair<std::string, MlirModule>
-getKernelNameAndModule(py::object &kernel) {
-  if (py::hasattr(kernel, "compile"))
+getKernelNameAndModule(nb::object &kernel) {
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   return std::make_pair(kernelName, kernelMod);
 }
 
 /// @brief Run `cudaq::observe` on the provided kernel and spin operator.
-observe_result pyObserve(py::object &kernel, spin_op &spin_operator,
-                         py::args args, const int shots,
+observe_result pyObserve(nb::object &kernel, spin_op &spin_operator,
+                         nb::args args, const int shots,
                          bool argMapperProvided = false) {
   auto [kernelName, kernelMod] = getKernelNameAndModule(kernel);
   auto &platform = cudaq::get_platform();
@@ -112,7 +112,7 @@ observe_result pyObserve(py::object &kernel, spin_op &spin_operator,
 /// @brief Return whether or not \p kernel is compatible with the remote VQE
 /// implementation that requires the variation parameters to be the first
 /// argument in the kernel.
-static bool firstArgIsCompatibleWithRemoteVQE(py::object &kernel) {
+static bool firstArgIsCompatibleWithRemoteVQE(nb::object &kernel) {
   auto [kernelName, kernelMod] = getKernelNameAndModule(kernel);
   auto kernelFunc = getKernelFuncOp(kernelMod, kernelName);
   if (kernelFunc.getNumArguments() < 1)
@@ -130,9 +130,9 @@ static bool firstArgIsCompatibleWithRemoteVQE(py::object &kernel) {
 /// function is used for many of the pyVQE variants below, so some of the
 /// parameters may be nullptr.
 static optimization_result
-pyVQE_remote_cpp(cudaq::quantum_platform &platform, py::object &kernel,
+pyVQE_remote_cpp(cudaq::quantum_platform &platform, nb::object &kernel,
                  spin_op &hamiltonian, cudaq::optimizer &optimizer,
-                 cudaq::gradient *gradient, py::function *argumentMapper,
+                 cudaq::gradient *gradient, nb::callable *argumentMapper,
                  const int n_params, const int shots) {
   auto [kernelName, kernelMod] = getKernelNameAndModule(kernel);
   auto ctx = std::make_unique<ExecutionContext>("observe", /*shots=*/0);
@@ -145,9 +145,9 @@ pyVQE_remote_cpp(cudaq::quantum_platform &platform, py::object &kernel,
   void *kernelArgs = nullptr;
   if (argumentMapper) {
     std::vector<double> myArg(n_params);
-    py::list py_list = py::cast(myArg);
-    py::tuple result = (*argumentMapper)(py_list);
-    py::args runtimeArgs = result;
+    nb::list nb_list;
+    (*argumentMapper)(nb_list);
+    nb::args runtimeArgs = nb::args(nb_list, nb::detail::steal_t());
 
     // Serialize arguments (all concrete parameters except for the first one)
     // into kernelArgs buffer space.
@@ -155,7 +155,7 @@ pyVQE_remote_cpp(cudaq::quantum_platform &platform, py::object &kernel,
     setDataLayout(kernelMod);
     cudaq::packArgs(
         args, runtimeArgs, kernelFunc,
-        [](OpaqueArguments &, py::object &) { return false; }, startingArgIdx);
+        [](OpaqueArguments &, nb::object &) { return false; }, startingArgIdx);
   }
   kernelArgs = pyGetKernelArgs(kernelName, kernelMod, args, /*names=*/{},
                                startingArgIdx);
@@ -176,17 +176,17 @@ pyVQE_remote_cpp(cudaq::quantum_platform &platform, py::object &kernel,
 /// @brief Perform VQE on a remote platform. This function is used for many of
 /// the pyVQE variants below, so some of the parameters may be nullptr.
 static optimization_result
-pyVQE_remote(cudaq::quantum_platform &platform, py::object &kernel,
+pyVQE_remote(cudaq::quantum_platform &platform, nb::object &kernel,
              spin_op &hamiltonian, cudaq::optimizer &optimizer,
-             cudaq::gradient *gradient, py::function *argumentMapper,
+             cudaq::gradient *gradient, nb::callable *argumentMapper,
              const int n_params, const int shots) {
-  py::object json = py::module_::import("json");
-  py::object inspect = py::module_::import("inspect");
+  nb::object json = nb::module_::import_("json");
+  nb::object inspect = nb::module_::import_("inspect");
 
   // Form scoped_vars_str. This is needed for a) capturing user variables when
   // an argumentMapper is provided, and b) automatically capturing all nested
   // cudaq.kernels.
-  py::dict scoped_vars = get_serializable_var_dict();
+  nb::dict scoped_vars = get_serializable_var_dict();
 
 // This macro loads a JSON-like object into scoped_vars[] as
 // scoped_vars["__varname"] = varname. This roughly corresponds to the
@@ -194,19 +194,23 @@ pyVQE_remote(cudaq::quantum_platform &platform, py::object &kernel,
 //  scoped_vars["__varname/module.name"] = json.loads(varname.to_json())
 #define LOAD_VAR(VAR_NAME)                                                     \
   do {                                                                         \
-    py::object val = py::cast(VAR_NAME);                                       \
-    scoped_vars[py::str(                                                       \
-        std::string("__" #VAR_NAME "/") +                                      \
-        val.get_type().attr("__module__").cast<std::string>() + "." +          \
-        val.get_type().attr("__name__").cast<std::string>())] =                \
+    nb::object val = nb::cast(VAR_NAME);                                       \
+    std::string module_name =                                                  \
+        nb::cast<std::string>(val.type().attr("__module__"));                 \
+    std::string type_name =                                                    \
+        nb::cast<std::string>(val.type().attr("__name__"));                   \
+    std::string key_name = "__" #VAR_NAME "/" + module_name + "." + type_name; \
+    scoped_vars[nb::str(key_name.c_str())] =                                   \
         json.attr("loads")(val.attr("to_json")());                             \
   } while (0)
 #define LOAD_VAR_NO_CAST(VAR_NAME)                                             \
   do {                                                                         \
-    scoped_vars[py::str(                                                       \
-        std::string("__" #VAR_NAME "/") +                                      \
-        VAR_NAME.get_type().attr("__module__").cast<std::string>() + "." +     \
-        VAR_NAME.get_type().attr("__name__").cast<std::string>())] =           \
+    std::string module_name =                                                  \
+        nb::cast<std::string>(VAR_NAME.type().attr("__module__"));            \
+    std::string type_name =                                                    \
+        nb::cast<std::string>(VAR_NAME.type().attr("__name__"));              \
+    std::string key_name = "__" #VAR_NAME "/" + module_name + "." + type_name; \
+    scoped_vars[nb::str(key_name.c_str())] =                                   \
         json.attr("loads")(VAR_NAME.attr("to_json")());                        \
   } while (0)
 
@@ -220,7 +224,7 @@ pyVQE_remote(cudaq::quantum_platform &platform, py::object &kernel,
   // Get a string representation of the scoped_vars dictionary. This is
   // guaranteed to be a JSON-friendly dictionary, so the conversion should occur
   // cleanly.
-  auto scoped_vars_str = json.attr("dumps")(scoped_vars).cast<std::string>();
+  auto scoped_vars_str = nb::cast<std::string>(json.attr("dumps")(scoped_vars));
 
   // Form SerializedCodeExecutionContext.source_code
   std::ostringstream os;
@@ -254,7 +258,7 @@ pyVQE_remote(cudaq::quantum_platform &platform, py::object &kernel,
   auto ctx = std::make_unique<cudaq::ExecutionContext>("sample", 0);
   platform.set_exec_ctx(ctx.get());
   platform.launchSerializedCodeExecution(
-      kernel.attr("name").cast<std::string>(), scCtx);
+      nb::cast<std::string>(kernel.attr("name")), scCtx);
   platform.reset_exec_ctx();
   auto result = cudaq::optimization_result{};
   if (ctx->optResult)
@@ -273,7 +277,7 @@ static void throwPerformanceError() {
 }
 
 /// @brief Run `cudaq.vqe()` without a gradient strategy.
-optimization_result pyVQE(py::object &kernel, spin_op &hamiltonian,
+optimization_result pyVQE(nb::object &kernel, spin_op &hamiltonian,
                           cudaq::optimizer &optimizer, const int n_params,
                           const int shots = -1) {
   auto &platform = cudaq::get_platform();
@@ -290,7 +294,10 @@ optimization_result pyVQE(py::object &kernel, spin_op &hamiltonian,
                         n_params, shots);
   return optimizer.optimize(n_params, [&](const std::vector<double> &x,
                                           std::vector<double> &grad_vec) {
-    py::args params = py::make_tuple(x);
+    nb::list nb_list;
+    for (double d : x)
+      nb_list.append(d);
+    nb::args params = nb::args(nb_list, nb::detail::steal_t());
     observe_result result = pyObserve(kernel, hamiltonian, params, shots);
     double energy = result.expectation();
     return energy;
@@ -299,9 +306,9 @@ optimization_result pyVQE(py::object &kernel, spin_op &hamiltonian,
 
 /// @brief Run `cudaq.vqe()` without a gradient strategy, using the
 /// user provided `argument_mapper`.
-optimization_result pyVQE(py::object &kernel, spin_op &hamiltonian,
+optimization_result pyVQE(nb::object &kernel, spin_op &hamiltonian,
                           cudaq::optimizer &optimizer, const int n_params,
-                          py::function &argumentMapper, const int shots = -1) {
+                          nb::callable &argumentMapper, const int shots = -1) {
   auto &platform = cudaq::get_platform();
   if (platform.get_remote_capabilities().vqe) {
     if (firstArgIsCompatibleWithRemoteVQE(kernel))
@@ -315,12 +322,10 @@ optimization_result pyVQE(py::object &kernel, spin_op &hamiltonian,
                         /*gradient=*/nullptr, &argumentMapper, n_params, shots);
   return optimizer.optimize(n_params, [&](const std::vector<double> &x,
                                           std::vector<double> &grad_vec) {
-    py::args params;
-    auto hasToBeTuple = argumentMapper(x);
-    if (py::isinstance<py::tuple>(hasToBeTuple))
-      params = hasToBeTuple;
-    else
-      params = py::make_tuple(hasToBeTuple);
+    nb::object hasToBeTuple = argumentMapper(x);
+    if (!nb::isinstance<nb::tuple>(hasToBeTuple))
+      hasToBeTuple = nb::tuple(hasToBeTuple);
+    nb::args params = nb::args(hasToBeTuple, nb::detail::steal_t());
     observe_result result = pyObserve(kernel, hamiltonian, params, shots, true);
     double energy = result.expectation();
     return energy;
@@ -328,7 +333,7 @@ optimization_result pyVQE(py::object &kernel, spin_op &hamiltonian,
 }
 
 /// @brief Run `cudaq.vqe()` with the provided gradient strategy.
-optimization_result pyVQE(py::object &kernel, cudaq::gradient &gradient,
+optimization_result pyVQE(nb::object &kernel, cudaq::gradient &gradient,
                           spin_op &hamiltonian, cudaq::optimizer &optimizer,
                           const int n_params, const int shots = -1) {
   // Get the expected value of the system, <H> at the provided
@@ -348,7 +353,10 @@ optimization_result pyVQE(py::object &kernel, cudaq::gradient &gradient,
                         /*argumentMapper=*/nullptr, n_params, shots);
   std::function<double(std::vector<double>)> get_expected_value =
       [&](std::vector<double> x) {
-        py::args params = py::make_tuple(x);
+        nb::list nb_list;
+        for (double d : x)
+          nb_list.append(d);
+        nb::args params = nb::args(nb_list, nb::detail::steal_t());
         observe_result result = pyObserve(kernel, hamiltonian, params, shots);
         double energy = result.expectation();
         return energy;
@@ -366,9 +374,9 @@ optimization_result pyVQE(py::object &kernel, cudaq::gradient &gradient,
 
 /// @brief Run `cudaq.vqe()` with the provided gradient strategy,
 /// using the provided `argument_mapper`.
-optimization_result pyVQE(py::object &kernel, cudaq::gradient &gradient,
+optimization_result pyVQE(nb::object &kernel, cudaq::gradient &gradient,
                           spin_op &hamiltonian, cudaq::optimizer &optimizer,
-                          const int n_params, py::function &argumentMapper,
+                          const int n_params, nb::callable &argumentMapper,
                           const int shots = -1) {
   // Get the expected value of the system, <H> at the provided
   // vector of parameters. This is passed to `cudaq::gradient::compute`
@@ -386,12 +394,10 @@ optimization_result pyVQE(py::object &kernel, cudaq::gradient &gradient,
                         &argumentMapper, n_params, shots);
   std::function<double(std::vector<double>)> get_expected_value =
       [&](std::vector<double> x) {
-        py::args params;
-        auto hasToBeTuple = argumentMapper(x);
-        if (py::isinstance<py::tuple>(hasToBeTuple))
-          params = hasToBeTuple;
-        else
-          params = py::make_tuple(hasToBeTuple);
+        nb::object hasToBeTuple = argumentMapper(x);
+        if (!nb::isinstance<nb::tuple>(hasToBeTuple))
+          hasToBeTuple = nb::tuple(hasToBeTuple);
+        nb::args params = nb::args(hasToBeTuple, nb::detail::steal_t());
         observe_result result =
             pyObserve(kernel, hamiltonian, params, shots, true);
         double energy = result.expectation();
@@ -408,19 +414,19 @@ optimization_result pyVQE(py::object &kernel, cudaq::gradient &gradient,
   });
 }
 
-void bindVQE(py::module &mod) {
+void bindVQE(nb::module_ &mod) {
   // FIXME(OperatorCpp): Remove this when the operator class is implemented in
   // C++
-  const auto convertToSpinOp = [](py::object &obj) -> cudaq::spin_op {
-    if (py::hasattr(obj, "_to_spinop"))
-      return obj.attr("_to_spinop")().cast<cudaq::spin_op>();
-    return obj.cast<cudaq::spin_op>();
+  const auto convertToSpinOp = [](nb::object &obj) -> cudaq::spin_op {
+    if (nb::hasattr(obj, "_to_spinop"))
+      return nb::cast<cudaq::spin_op>(obj.attr("_to_spinop")());
+    return nb::cast<cudaq::spin_op>(obj);
   };
 
   /// @brief Gradient-Free `cudaq.optimizer` overloads:
   mod.def(
       "vqe",
-      [&](py::object &kernel, py::object &spin_operator,
+      [&](nb::object &kernel, nb::object &spin_operator,
           cudaq::optimizer &optimizer, const int parameter_count,
           const int shots) {
         auto requires_grad = optimizer.requiresGradients();
@@ -431,15 +437,15 @@ void bindVQE(py::module &mod) {
         auto asSpinOp = convertToSpinOp(spin_operator);
         return pyVQE(kernel, asSpinOp, optimizer, parameter_count, shots);
       },
-      py::arg("kernel"), py::arg("spin_operator"), py::arg("optimizer"),
-      py::arg("parameter_count"), py::arg("shots") = -1, "");
+      nb::arg("kernel"), nb::arg("spin_operator"), nb::arg("optimizer"),
+      nb::arg("parameter_count"), nb::arg("shots") = -1, "");
 
   // With a provided `argument_mapper`.
   mod.def(
       "vqe",
-      [&](py::object &kernel, py::object &spin_operator,
+      [&](nb::object &kernel, nb::object &spin_operator,
           cudaq::optimizer &optimizer, const int parameter_count,
-          py::function &argumentMapper, const int shots) {
+          nb::callable &argumentMapper, const int shots) {
         auto requires_grad = optimizer.requiresGradients();
         if (requires_grad) {
           std::runtime_error("Provided optimizer requires a gradient strategy "
@@ -449,38 +455,38 @@ void bindVQE(py::module &mod) {
         return pyVQE(kernel, asSpinOp, optimizer, parameter_count,
                      argumentMapper, shots);
       },
-      py::arg("kernel"), py::arg("spin_operator"), py::arg("optimizer"),
-      py::arg("parameter_count"), py::arg("argument_mapper"),
-      py::arg("shots") = -1, "");
+      nb::arg("kernel"), nb::arg("spin_operator"), nb::arg("optimizer"),
+      nb::arg("parameter_count"), nb::arg("argument_mapper"),
+      nb::arg("shots") = -1, "");
 
   /// @brief Gradient based `cudaq.optimizers` overloads:
   mod.def(
       "vqe",
-      [&](py::object &kernel, cudaq::gradient &gradient,
-          py::object &spin_operator, cudaq::optimizer &optimizer,
+      [&](nb::object &kernel, cudaq::gradient &gradient,
+          nb::object &spin_operator, cudaq::optimizer &optimizer,
           const int parameter_count, const int shots) {
         auto asSpinOp = convertToSpinOp(spin_operator);
         return pyVQE(kernel, gradient, asSpinOp, optimizer, parameter_count,
                      shots);
       },
-      py::arg("kernel"), py::arg("gradient_strategy"), py::arg("spin_operator"),
-      py::arg("optimizer"), py::arg("parameter_count"), py::arg("shots") = -1,
+      nb::arg("kernel"), nb::arg("gradient_strategy"), nb::arg("spin_operator"),
+      nb::arg("optimizer"), nb::arg("parameter_count"), nb::arg("shots") = -1,
       "");
 
   // With a provided `argument_mapper`.
   mod.def(
       "vqe",
-      [&](py::object &kernel, cudaq::gradient &gradient,
-          py::object &spin_operator, cudaq::optimizer &optimizer,
-          const int parameter_count, py::function &argumentMapper,
+      [&](nb::object &kernel, cudaq::gradient &gradient,
+          nb::object &spin_operator, cudaq::optimizer &optimizer,
+          const int parameter_count, nb::callable &argumentMapper,
           const int shots) {
         auto asSpinOp = convertToSpinOp(spin_operator);
         return pyVQE(kernel, gradient, asSpinOp, optimizer, parameter_count,
                      argumentMapper, shots);
       },
-      py::arg("kernel"), py::arg("gradient_strategy"), py::arg("spin_operator"),
-      py::arg("optimizer"), py::arg("parameter_count"),
-      py::arg("argument_mapper"), py::arg("shots") = -1, "");
+      nb::arg("kernel"), nb::arg("gradient_strategy"), nb::arg("spin_operator"),
+      nb::arg("optimizer"), nb::arg("parameter_count"),
+      nb::arg("argument_mapper"), nb::arg("shots") = -1, "");
 }
 
 } // namespace cudaq

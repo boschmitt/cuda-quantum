@@ -9,19 +9,22 @@
 #include "py_qubit_qis.h"
 #include "cudaq/qis/qubit_qis.h"
 #include <fmt/core.h>
-#include <pybind11/complex.h>
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/operators.h>
+#include <functional>
+
+namespace nb = nanobind;
 
 namespace cudaq {
 
-void bindQIS(py::module &mod) {
+void bindQIS(nb::module_ &mod) {
 
-  py::class_<qubit>(
+  nb::class_<qubit>(
       mod, "qubit",
       "The qubit is the primary unit of information in a quantum computer. "
       "Qubits can be created individually or as part of larger registers.")
-      .def(py::init<>())
+      .def(nb::init<>())
       .def(
           "__invert__", [](qubit &self) -> qubit & { return !self; },
           "Negate the control qubit.")
@@ -33,7 +36,7 @@ void bindQIS(py::module &mod) {
           "id", [](qubit &self) { return self.id(); },
           "Return a unique integer identifier for this qubit.");
 
-  py::class_<qview<>>(mod, "qview",
+  nb::class_<qview<>>(mod, "qview",
                       "A non-owning view on a register of qubits.")
       .def(
           "size", [](qview<> &self) { return self.size(); },
@@ -55,9 +58,12 @@ void bindQIS(py::module &mod) {
       .def(
           "__iter__",
           [](qview<> &self) {
-            return py::make_iterator(self.begin(), self.end());
-          },
-          py::keep_alive<0, 1>())
+            std::vector<std::reference_wrapper<qubit>> qubits;
+            for (auto it = self.begin(); it != self.end(); ++it) {
+              qubits.push_back(std::ref(*it));
+            }
+            return nb::cast(qubits);
+          })
       .def(
           "slice",
           [](qview<> &self, std::size_t start, std::size_t count) {
@@ -65,14 +71,15 @@ void bindQIS(py::module &mod) {
           },
           "Return the `[start, start+count]` qudits as a non-owning qview.")
       .def("__getitem__", &qview<>::operator[],
-           py::return_value_policy::reference,
            "Return the qubit at the given index.");
 
-  py::class_<qvector<>>(
+  nb::class_<qvector<>>(
       mod, "qvector",
       "An owning, dynamically sized container for qubits. The semantics of the "
       "`qvector` follows that of a `std::vector` or `list` for qubits.")
-      .def(py::init<std::size_t>())
+      .def("__init__", [](qvector<> &self, std::size_t size) {
+        new (&self) qvector<>(size);
+      })
       .def(
           "size", [](qvector<> &self) { return self.size(); },
           "Return the number of qubits in this `qvector`.")
@@ -82,11 +89,9 @@ void bindQIS(py::module &mod) {
           "Return first `count` qubits in this `qvector` as a non-owning view.")
       .def(
           "front", [](qvector<> &self) -> qubit & { return self.front(); },
-          py::return_value_policy::reference,
           "Return first qubit in this `qvector`.")
       .def(
           "back", [](qvector<> &self) -> qubit & { return self.back(); },
-          py::return_value_policy::reference,
           "Return the last qubit in this `qvector`.")
       .def(
           "back",
@@ -96,9 +101,12 @@ void bindQIS(py::module &mod) {
       .def(
           "__iter__",
           [](qvector<> &self) {
-            return py::make_iterator(self.begin(), self.end());
-          },
-          py::keep_alive<0, 1>())
+            std::vector<std::reference_wrapper<qubit>> qubits;
+            for (auto it = self.begin(); it != self.end(); ++it) {
+              qubits.push_back(std::ref(*it));
+            }
+            return nb::cast(qubits);
+          })
       .def(
           "slice",
           [](qvector<> &self, std::size_t start, std::size_t count) {
@@ -106,13 +114,12 @@ void bindQIS(py::module &mod) {
           },
           "Return the `[start, start+count]` qudits as a non-owning qview.")
       .def("__getitem__", &qvector<2>::operator[],
-           py::return_value_policy::reference,
            "Return the qubit at the given index.");
 
-  py::class_<pauli_word>(mod, "pauli_word",
+  nb::class_<pauli_word>(mod, "pauli_word",
                          "The `pauli_word` is a thin wrapper on a Pauli tensor "
                          "product string, e.g. `XXYZ` on 4 qubits.")
-      .def(py::init<>())
-      .def(py::init<const std::string>());
+      .def(nb::init<>())
+      .def(nb::init<const std::string>());
 }
 } // namespace cudaq

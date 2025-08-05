@@ -12,10 +12,11 @@
 #include "cudaq/algorithms/get_state.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include "mlir/CAPI/IR.h"
-#include <pybind11/complex.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/ndarray.h>
 
 namespace {
 std::vector<int> bitStringToIntVec(const std::string &bitString) {
@@ -44,12 +45,12 @@ std::vector<std::unique_ptr<void, std::function<void(void *)>>>
     hostDataFromDevice;
 
 /// @brief Run `cudaq::get_state` on the provided kernel and spin operator.
-state pyGetState(py::object kernel, py::args args) {
-  if (py::hasattr(kernel, "compile"))
+state pyGetState(nb::object kernel, nb::args args) {
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
 
   return details::extractState([&]() mutable {
@@ -120,13 +121,13 @@ public:
 
 /// @brief Run `cudaq::get_state` for remote execution targets on the provided
 /// kernel and args
-state pyGetStateRemote(py::object kernel, py::args args) {
-  if (py::hasattr(kernel, "compile"))
+state pyGetStateRemote(nb::object kernel, nb::args args) {
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
   args = simplifiedValidateInputArguments(args);
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
   auto [argWrapper, size, returnOffset] =
       pyCreateNativeKernel(kernelName, kernelMod, *argData);
@@ -154,28 +155,28 @@ public:
 
 /// @brief Run `cudaq::get_state` for qpu targets on the provided
 /// kernel and args
-state pyGetStateQPU(py::object kernel, py::args args) {
-  if (py::hasattr(kernel, "compile"))
+state pyGetStateQPU(nb::object kernel, nb::args args) {
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
   args = simplifiedValidateInputArguments(args);
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
   auto [argWrapper, size, returnOffset] =
       pyCreateNativeKernel(kernelName, kernelMod, *argData);
   return state(new PyQPUState(kernelName, argData));
 }
 
-state pyGetStateLibraryMode(py::object kernel, py::args args) {
+state pyGetStateLibraryMode(nb::object kernel, nb::args args) {
   return details::extractState([&]() mutable {
-    if (0 == args.size())
+    if (nb::len(args) == 0)
       kernel();
     else {
-      std::vector<py::object> argsData;
-      for (size_t i = 0; i < args.size(); i++) {
-        py::object arg = args[i];
-        argsData.emplace_back(std::forward<py::object>(arg));
+      std::vector<nb::object> argsData;
+      for (size_t i = 0; i < nb::len(args); i++) {
+        nb::object arg = args[i];
+        argsData.emplace_back(std::forward<nb::object>(arg));
       }
       kernel(std::move(argsData));
     }
@@ -183,15 +184,15 @@ state pyGetStateLibraryMode(py::object kernel, py::args args) {
 }
 
 /// @brief Bind the get_state cudaq function
-void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
-  py::enum_<cudaq::InitialState>(mod, "InitialStateType",
+void bindPyState(nb::module_ &mod, LinkedLibraryHolder &holder) {
+  nb::enum_<cudaq::InitialState>(mod, "InitialStateType",
                                  "Enumeration describing the initial state "
                                  "type to be created in the backend")
       .value("ZERO", cudaq::InitialState::ZERO)
       .value("UNIFORM", cudaq::InitialState::UNIFORM)
       .export_values();
 
-  py::class_<SimulationState::Tensor>(
+  nb::class_<SimulationState::Tensor>(
       mod, "Tensor",
       "The `Tensor` describes a pointer to simulation data as well as the rank "
       "and extents for that tensorial data it represents.")
@@ -199,22 +200,22 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
            [](SimulationState::Tensor &tensor) {
              return reinterpret_cast<intptr_t>(tensor.data);
            })
-      .def_readonly("extents", &SimulationState::Tensor::extents)
+      .def_ro("extents", &SimulationState::Tensor::extents)
       .def("get_rank", &SimulationState::Tensor::get_rank)
       .def("get_element_size", &SimulationState::Tensor::element_size)
       .def("get_num_elements", &SimulationState::Tensor::get_num_elements);
-  py::class_<state>(
-      mod, "State", py::buffer_protocol(),
+  nb::class_<state>(
+      mod, "State",
       "A data-type representing the quantum state of the internal simulator. "
       "This type is not user-constructible and instances can only be retrieved "
       "via the `cudaq.get_state(...)` function or the static "
       "cudaq.State.from_data() method. \n")
-      .def_buffer([](const state &self) -> py::buffer_info {
+      .def("__array_interface__", [](const state &self) -> nb::dict {
         if (self.get_num_tensors() != 1)
           throw std::runtime_error("Numpy interop is only supported for vector "
                                    "and matrix state data.");
 
-        // This method is used by Pybind to enable interoperability
+        // This method is used by nanobind to enable interoperability
         // with NumPy array data. We therefore must be careful since the
         // state data may actually be on GPU device.
 
@@ -251,28 +252,24 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
         // to get the data type size and the format descriptor
         auto [dataTypeSize, desc] =
             precision == SimulationState::precision::fp32
-                ? std::make_tuple(
-                      sizeof(std::complex<float>),
-                      py::format_descriptor<std::complex<float>>::format())
-                : std::make_tuple(
-                      sizeof(std::complex<double>),
-                      py::format_descriptor<std::complex<double>>::format());
+                ? std::make_tuple(sizeof(std::complex<float>), "F")
+                : std::make_tuple(sizeof(std::complex<double>), "D");
 
         // Get the shape of the data. Return buffer info in a
         // correctly shaped manner.
         auto shape = self.get_tensor().extents;
-        if (shape.size() != 1)
-          return py::buffer_info(dataPtr, dataTypeSize, /*itemsize */
-                                 desc, 2,               /* ndim */
-                                 {shape[0], shape[1]},  /* shape */
-                                 {dataTypeSize * static_cast<ssize_t>(shape[1]),
-                                  dataTypeSize}, /* strides */
-                                 true            /* readonly */
-          );
-        return py::buffer_info(dataPtr, dataTypeSize, /*itemsize */
-                               desc, 1,               /* ndim */
-                               {shape[0]},            /* shape */
-                               {dataTypeSize});
+        nb::dict interface;
+        interface["version"] = 3;
+        interface["data"] = nb::make_tuple(reinterpret_cast<intptr_t>(dataPtr), false);
+        interface["typestr"] = desc;
+        if (shape.size() != 1) {
+          interface["shape"] = nb::make_tuple(shape[0], shape[1]);
+          interface["strides"] = nb::make_tuple(dataTypeSize * static_cast<ssize_t>(shape[1]), dataTypeSize);
+        } else {
+          interface["shape"] = nb::make_tuple(shape[0]);
+          interface["strides"] = nb::make_tuple(dataTypeSize);
+        }
+        return interface;
       })
       .def(
           "__len__",
@@ -291,20 +288,17 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
           "Returns the number of qubits represented by this state.")
       .def_static(
           "from_data",
-          [&](py::buffer data) {
+          [&](nb::ndarray<nb::numpy> data) {
             // This is by default host data
-            auto info = data.request();
-            if (info.format ==
-                py::format_descriptor<std::complex<float>>::format()) {
+            if (data.dtype() == nb::dtype<std::complex<float>>()) {
               return state::from_data(std::make_pair(
-                  reinterpret_cast<std::complex<float> *>(info.ptr),
-                  info.size));
+                  reinterpret_cast<std::complex<float> *>(data.data()),
+                  data.size()));
             }
-            if (info.format ==
-                py::format_descriptor<std::complex<double>>::format()) {
+            if (data.dtype() == nb::dtype<std::complex<double>>()) {
               return state::from_data(std::make_pair(
-                  reinterpret_cast<std::complex<double> *>(info.ptr),
-                  info.size));
+                  reinterpret_cast<std::complex<double> *>(data.data()),
+                  data.size()));
             }
             throw std::runtime_error(
                 "A numpy array with only floating point elements passed to "
@@ -318,14 +312,13 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
           "Return a state from data.")
       .def_static(
           "from_data",
-          [](const std::vector<py::buffer> &tensors) {
+          [](const std::vector<nb::ndarray<nb::numpy>> &tensors) {
             cudaq::TensorStateData tensorData;
             for (auto &tensor : tensors) {
-              auto info = tensor.request();
-              const std::vector<std::size_t> extents(info.shape.begin(),
-                                                     info.shape.end());
+              const std::vector<std::size_t> extents(tensor.shape_ptr(), 
+                                                     tensor.shape_ptr() + tensor.ndim());
               tensorData.emplace_back(
-                  std::pair<const void *, std::vector<std::size_t>>{info.ptr,
+                  std::pair<const void *, std::vector<std::size_t>>{tensor.data(),
                                                                     extents});
             }
             return state::from_data(tensorData);
@@ -346,36 +339,36 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
           "Return a state from matrix product state tensor data.")
       .def_static(
           "from_data",
-          [](const py::list &tensors) {
-            // Note: we must use Python type (py::list) for proper overload
-            // resolution. The overload for py::object, intended for cupy arrays
+          [](const nb::list &tensors) {
+            // Note: we must use Python type (nb::list) for proper overload
+            // resolution. The overload for nb::object, intended for cupy arrays
             // (implementing Python array interface), may be overshadowed by any
             // std::vector overloads.
             cudaq::TensorStateData tensorData;
-            for (auto &tensor : tensors) {
+            for (nb::handle tensor : tensors) {
               // Make sure this is a CuPy array
-              if (!py::hasattr(tensor, "data"))
+              if (!nb::hasattr(tensor, "data"))
                 throw std::runtime_error(
-                    "invalid from_data operation on py::object - "
+                    "invalid from_data operation on nb::object - "
                     "only cupy array supported.");
               auto data = tensor.attr("data");
-              if (!py::hasattr(data, "ptr"))
+              if (!nb::hasattr(data, "ptr"))
                 throw std::runtime_error(
-                    "invalid from_data operation on py::object tensors - "
+                    "invalid from_data operation on nb::object tensors - "
                     "only cupy array supported.");
 
               // We know this is a cupy device pointer.
               // Start by ensuring it is of proper complex type
-              auto typeStr = py::str(tensor.attr("dtype")).cast<std::string>();
+              auto typeStr = nb::cast<std::string>(nb::str(tensor.attr("dtype")));
               if (typeStr != "complex128")
                 throw std::runtime_error(
-                    "invalid from_data operation on py::object tensors - "
+                    "invalid from_data operation on nb::object tensors - "
                     "only cupy complex128 tensors supported.");
-              auto shape = tensor.attr("shape").cast<py::tuple>();
+              auto shape = nb::cast<nb::tuple>(tensor.attr("shape"));
               std::vector<std::size_t> extents;
               for (auto el : shape)
-                extents.emplace_back(el.cast<std::size_t>());
-              long ptr = data.attr("ptr").cast<long>();
+                extents.emplace_back(nb::cast<std::size_t>(el));
+              long ptr = nb::cast<long>(data.attr("ptr"));
               tensorData.emplace_back(
                   std::pair<const void *, std::vector<std::size_t>>{
                       reinterpret_cast<std::complex<double> *>(ptr), extents});
@@ -386,22 +379,22 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
           "ndarray).")
       .def_static(
           "from_data",
-          [&holder](py::object opaqueData) {
+          [&holder](nb::object opaqueData) {
             // Make sure this is a CuPy array
-            if (!py::hasattr(opaqueData, "data"))
+            if (!nb::hasattr(opaqueData, "data"))
               throw std::runtime_error(
-                  "invalid from_data operation on py::object - "
+                  "invalid from_data operation on nb::object - "
                   "only cupy array supported.");
             auto data = opaqueData.attr("data");
-            if (!py::hasattr(data, "ptr"))
+            if (!nb::hasattr(data, "ptr"))
               throw std::runtime_error(
-                  "invalid from_data operation on py::object - "
+                  "invalid from_data operation on nb::object - "
                   "only cupy array supported.");
 
             // We know this is a cupy device pointer.
             // Start by ensuring it is of complex type
             auto typeStr =
-                py::str(opaqueData.attr("dtype")).cast<std::string>();
+                nb::cast<std::string>(nb::str(opaqueData.attr("dtype")));
             if (typeStr.find("float") != std::string::npos)
               throw std::runtime_error(
                   "CuPy array with only floating point elements passed to "
@@ -414,16 +407,16 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
             // Compute the number of elements in the array
             std::vector<std::size_t> extents;
             auto numElements = [&]() {
-              auto shape = opaqueData.attr("shape").cast<py::tuple>();
+              auto shape = nb::cast<nb::tuple>(opaqueData.attr("shape"));
               std::size_t numElements = 1;
               for (auto el : shape) {
-                numElements *= el.cast<std::size_t>();
-                extents.emplace_back(el.cast<std::size_t>());
+                numElements *= nb::cast<std::size_t>(el);
+                extents.emplace_back(nb::cast<std::size_t>(el));
               }
               return numElements;
             }();
 
-            long ptr = data.attr("ptr").cast<long>();
+            long ptr = nb::cast<long>(data.attr("ptr"));
             if (holder.getTarget().name == "dynamics") {
               // For dynamics, we need to send on the extents to
               // distinguish state vector vs density matrix.
@@ -455,7 +448,7 @@ void bindPyState(py::module &mod, LinkedLibraryHolder &holder) {
       .def(
           "getTensor",
           [](state &self, std::size_t idx) { return self.get_tensor(idx); },
-          py::arg("idx") = 0,
+          nb::arg("idx") = 0,
           "Return the `idx` tensor making up this state representation.")
       .def(
           "getTensors", [](state &self) { return self.get_tensors(); },
@@ -567,7 +560,7 @@ index pair.
           [](state &self) {
             std::stringstream ss;
             self.dump(ss);
-            py::print(ss.str());
+            nb::print(ss.str().c_str());
           },
           "Print the state to the console.")
       .def("__str__",
@@ -582,29 +575,26 @@ index pair.
           "Compute the overlap between the provided :class:`State`'s.")
       .def(
           "overlap",
-          [](state &self, py::buffer &other) {
+          [](state &self, nb::ndarray<nb::numpy> &other) {
             if (self.get_num_tensors() != 1)
               throw std::runtime_error("overlap NumPy interop only supported "
                                        "for vector and matrix state data.");
 
-            py::buffer_info info = other.request();
-
-            if (info.shape.size() > 2)
+            if (other.ndim() > 2)
               throw std::runtime_error("overlap NumPy interop only supported "
                                        "for vector and matrix state data.");
 
             // Check that the shapes are compatible
-            std::size_t otherNumElements = 1;
-            for (std::size_t i = 0; std::size_t shapeElement : info.shape) {
-              otherNumElements *= shapeElement;
-              if (shapeElement != self.get_tensor().extents[i++])
+            std::size_t otherNumElements = other.size();
+            for (std::size_t i = 0; i < other.ndim(); ++i) {
+              if (other.shape(i) != self.get_tensor().extents[i])
                 throw std::runtime_error(
                     "overlap error - invalid shape of input buffer.");
             }
 
             // Compute the overlap in the case that the
             // input buffer is FP64
-            if (info.itemsize == 16) {
+            if (other.dtype() == nb::dtype<std::complex<double>>()) {
               // if this state is FP32, then we have to throw an error
               if (self.get_precision() == SimulationState::precision::fp32)
                 throw std::runtime_error(
@@ -612,20 +602,20 @@ index pair.
                     "overlap is FP64.");
 
               auto otherState = state::from_data(std::make_pair(
-                  reinterpret_cast<complex *>(info.ptr), otherNumElements));
+                  reinterpret_cast<complex *>(other.data()), otherNumElements));
               return self.overlap(otherState);
             }
 
             // Compute the overlap in the case that the
             // input buffer is FP32
-            if (info.itemsize == 8) {
+            if (other.dtype() == nb::dtype<std::complex<float>>()) {
               // if this state is FP64, then we have to throw an error
               if (self.get_precision() == SimulationState::precision::fp64)
                 throw std::runtime_error(
                     "simulation state is FP64 but provided state buffer for "
                     "overlap is FP32.");
               auto otherState = state::from_data(std::make_pair(
-                  reinterpret_cast<std::complex<float> *>(info.ptr),
+                  reinterpret_cast<std::complex<float> *>(other.data()),
                   otherNumElements));
               return self.overlap(otherState);
             }
@@ -637,22 +627,22 @@ index pair.
           "Compute the overlap between the provided :class:`State`'s.")
       .def(
           "overlap",
-          [](state &self, py::object other) {
+          [](state &self, nb::object other) {
             // Make sure this is a CuPy array
-            if (!py::hasattr(other, "data"))
+            if (!nb::hasattr(other, "data"))
               throw std::runtime_error(
-                  "invalid overlap operation on py::object - "
+                  "invalid overlap operation on nb::object - "
                   "only cupy array supported.");
             auto data = other.attr("data");
-            if (!py::hasattr(data, "ptr"))
+            if (!nb::hasattr(data, "ptr"))
               throw std::runtime_error(
-                  "invalid overlap operation on py::object - "
+                  "invalid overlap operation on nb::object - "
                   "only cupy array supported.");
 
             // We know this is a cupy device pointer.
 
             // Start by ensuring it is of complex type
-            auto typeStr = py::str(other.attr("dtype")).cast<std::string>();
+            auto typeStr = nb::cast<std::string>(nb::str(other.attr("dtype")));
             if (typeStr.find("float") != std::string::npos)
               throw std::runtime_error(
                   "CuPy array with only floating point elements passed to "
@@ -676,15 +666,15 @@ index pair.
 
             // Compute the number of elements in the other array
             auto numOtherElements = [&]() {
-              auto shape = other.attr("shape").cast<py::tuple>();
+              auto shape = nb::cast<nb::tuple>(other.attr("shape"));
               std::size_t numElements = 1;
               for (auto el : shape)
-                numElements *= el.cast<std::size_t>();
+                numElements *= nb::cast<std::size_t>(el);
               return numElements;
             }();
 
             // Cast the device ptr and perform the overlap
-            long ptr = data.attr("ptr").cast<long>();
+            long ptr = nb::cast<long>(data.attr("ptr"));
             if (precision == SimulationState::precision::fp32)
               return self.overlap(cudaq::state::from_data(
                   std::make_pair(reinterpret_cast<std::complex<float> *>(ptr),
@@ -698,7 +688,7 @@ index pair.
 
   mod.def(
       "get_state",
-      [&](py::object kernel, py::args args) {
+      [&](nb::object kernel, nb::args args) {
         if (holder.getTarget().name == "remote-mqpu" ||
             holder.getTarget().name == "nvqc")
           return pyGetStateRemote(kernel, args);
@@ -732,7 +722,7 @@ Args:
   state = cudaq.get_state(kernel)
   print(state))#");
 
-  py::class_<async_state_result>(
+  nb::class_<async_state_result>(
       mod, "AsyncStateResult",
       R"#(A data-type containing the results of a call to :func:`get_state_async`. 
 The `AsyncStateResult` models a future-like type, whose 
@@ -742,23 +732,23 @@ See `future <https://en.cppreference.com/w/cpp/thread/future>`_
 for more information on this programming pattern.)#")
       .def(
           "get", [](async_state_result &self) { return self.get(); },
-          py::call_guard<py::gil_scoped_release>(),
+          nb::call_guard<nb::gil_scoped_release>(),
           "Return the :class:`State` from the asynchronous `get_state` "
           "accessor execution.\n");
 
   mod.def(
       "get_state_async",
-      [](py::object kernel, py::args args, std::size_t qpu_id) {
-        if (py::hasattr(kernel, "compile"))
+      [](nb::object kernel, nb::args args, std::size_t qpu_id) {
+        if (nb::hasattr(kernel, "compile"))
           kernel.attr("compile")();
 
-        auto kernelName = kernel.attr("name").cast<std::string>();
-        auto kernelMod = kernel.attr("module").cast<MlirModule>();
+        auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+        auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
         auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
 
         // Launch the asynchronous execution.
         auto &platform = cudaq::get_platform();
-        py::gil_scoped_release release;
+        nb::gil_scoped_release release;
         return details::runGetStateAsync(
             [kernelMod, argData, kernelName]() mutable {
               pyAltLaunchKernel(kernelName, kernelMod, *argData, {});
@@ -766,7 +756,7 @@ for more information on this programming pattern.)#")
             },
             platform, qpu_id);
       },
-      py::arg("kernel"), py::kw_only(), py::arg("qpu_id") = 0,
+      nb::arg("kernel"), nb::arg("args"), nb::kw_only(), nb::arg("qpu_id") = 0,
       R"#(Asynchronously retrieve the state generated by the given quantum kernel. 
 When targeting a quantum platform with more than one QPU, the optional
 `qpu_id` allows for control over which QPU to enable. Will return a

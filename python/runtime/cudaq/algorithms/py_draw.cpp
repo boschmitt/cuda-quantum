@@ -8,9 +8,8 @@
 #include "cudaq/algorithms/draw.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
-#include <pybind11/complex.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/string.h>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -19,17 +18,18 @@ namespace cudaq {
 
 namespace details {
 std::tuple<std::string, MlirModule, OpaqueArguments *>
-getKernelLaunchParameters(py::object &kernel, py::args args) {
-  if (py::len(kernel.attr("arguments")) != args.size())
+getKernelLaunchParameters(nb::object &kernel, nb::args args) {
+  nb::object kernel_args = kernel.attr("arguments");
+  if (nb::len(kernel_args) != args.size())
     throw std::runtime_error("Invalid number of arguments passed to draw:" +
                              std::to_string(args.size()) + " expected " +
-                             std::to_string(py::len(kernel.attr("arguments"))));
+                             std::to_string(nb::len(kernel_args)));
 
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   args = simplifiedValidateInputArguments(args);
   auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
 
@@ -39,7 +39,7 @@ getKernelLaunchParameters(py::object &kernel, py::args args) {
 } // namespace details
 
 /// @brief Run `cudaq::contrib::draw` on the provided kernel.
-std::string pyDraw(py::object &kernel, py::args args) {
+std::string pyDraw(nb::object &kernel, nb::args args) {
   auto [kernelName, kernelMod, argData] =
       details::getKernelLaunchParameters(kernel, args);
 
@@ -50,7 +50,7 @@ std::string pyDraw(py::object &kernel, py::args args) {
 }
 
 /// @brief Run `cudaq::contrib::draw`'s string overload on the provided kernel.
-std::string pyDraw(std::string format, py::object &kernel, py::args args) {
+std::string pyDraw(std::string format, nb::object &kernel, nb::args args) {
   if (format == "ascii") {
     return pyDraw(kernel, args);
   } else if (format == "latex") {
@@ -67,9 +67,9 @@ std::string pyDraw(std::string format, py::object &kernel, py::args args) {
 }
 
 /// @brief Bind the draw cudaq function
-void bindPyDraw(py::module &mod) {
+void bindPyDraw(nb::module_ &mod) {
   mod.def("draw",
-          py::overload_cast<std::string, py::object &, py::args>(&pyDraw),
+          static_cast<std::string (*)(std::string, nb::object &, nb::args)>(&pyDraw),
           R"#(Return a string representing the drawing of the execution path, 
 in the format specified as the first argument. If the format is 
 'ascii', the output will be a UTF-8 encoded string. If the format 
@@ -81,7 +81,7 @@ Args:
   *arguments (Optional[Any]): The concrete values to evaluate the kernel 
     function at. Leave empty if the kernel doesn't accept any arguments.)#")
       .def(
-          "draw", py::overload_cast<py::object &, py::args>(&pyDraw),
+          "draw", static_cast<std::string (*)(nb::object &, nb::args)>(&pyDraw),
           R"#(Return a UTF-8 encoded string representing drawing of the execution 
 path, i.e., the trace, of the provided `kernel`.
       

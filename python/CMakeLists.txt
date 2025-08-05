@@ -6,6 +6,9 @@
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED on)
+
 add_subdirectory(utils)
 
 if (CMAKE_BUILD_TYPE STREQUAL "DEBUG")
@@ -77,7 +80,7 @@ if(CUDAQ_BUILD_TESTS)
   endif()
 endif()
 
-#add_subdirectory(runtime/interop)
+add_subdirectory(runtime/interop)
 
 if (CUDENSITYMAT_ROOT AND CUDA_FOUND)
   add_subdirectory(runtime/cudaq/dynamics)

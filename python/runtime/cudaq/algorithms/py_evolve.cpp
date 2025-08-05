@@ -12,12 +12,14 @@
 #include "cudaq/algorithms/evolve_internal.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include "mlir/CAPI/IR.h"
-#include <pybind11/complex.h>
-#include <pybind11/functional.h>
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>
 
 namespace cudaq {
 
@@ -27,15 +29,15 @@ using spin_op_creator =
 
 template <typename numeric_type>
 evolve_result
-pyEvolve(state initial_state, py::object kernel,
+pyEvolve(state initial_state, nb::object kernel,
          std::map<std::string, numeric_type> params,
          std::vector<spin_op_creator<numeric_type>> observables = {},
          int shots_count = -1) {
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
 
   std::vector<spin_op> spin_ops = {};
   for (auto &observable : observables) {
@@ -56,17 +58,17 @@ pyEvolve(state initial_state, py::object kernel,
 
 template <typename numeric_type>
 evolve_result
-pyEvolve(state initial_state, std::vector<py::object> kernels,
+pyEvolve(state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, numeric_type>> params,
          std::vector<spin_op_creator<numeric_type>> observables = {},
          int shots_count = -1, bool save_intermediate_states = true) {
   std::vector<std::function<void(state)>> launchFcts = {};
-  for (py::object kernel : kernels) {
-    if (py::hasattr(kernel, "compile"))
+  for (nb::object kernel : kernels) {
+    if (nb::hasattr(kernel, "compile"))
       kernel.attr("compile")();
 
-    auto kernelName = kernel.attr("name").cast<std::string>();
-    auto kernelMod = kernel.attr("module").cast<MlirModule>();
+    auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+    auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
 
     launchFcts.push_back([kernelMod, kernelName](state state) mutable {
       auto *argData = new cudaq::OpaqueArguments();
@@ -91,25 +93,25 @@ pyEvolve(state initial_state, std::vector<py::object> kernels,
 
 template <typename numeric_type>
 async_evolve_result
-pyEvolveAsync(state initial_state, py::object kernel,
+pyEvolveAsync(state initial_state, nb::object kernel,
               std::map<std::string, numeric_type> params,
               std::vector<spin_op_creator<numeric_type>> observables = {},
               std::size_t qpu_id = 0,
               std::optional<cudaq::noise_model> noise_model = std::nullopt,
               int shots_count = -1) {
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
   auto kernelMod =
-      wrap(unwrap(kernel.attr("module").cast<MlirModule>()).clone());
-  auto kernelName = kernel.attr("name").cast<std::string>();
+      wrap(unwrap(nb::cast<MlirModule>(kernel.attr("module"))).clone());
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
 
   std::vector<spin_op> spin_ops = {};
   for (auto observable : observables) {
     spin_ops.push_back(observable(params));
   }
 
-  py::gil_scoped_release release;
+  nb::gil_scoped_release release;
   return __internal__::evolve_async(
       initial_state,
       [kernelMod, kernelName](state state) mutable {
@@ -123,22 +125,22 @@ pyEvolveAsync(state initial_state, py::object kernel,
 
 template <typename numeric_type>
 async_evolve_result
-pyEvolveAsync(state initial_state, std::vector<py::object> kernels,
+pyEvolveAsync(state initial_state, std::vector<nb::object> kernels,
               std::vector<std::map<std::string, numeric_type>> params,
               std::vector<spin_op_creator<numeric_type>> observables = {},
               std::size_t qpu_id = 0,
               std::optional<cudaq::noise_model> noise_model = std::nullopt,
               int shots_count = -1, bool save_intermediate_states = true) {
   std::vector<std::function<void(state)>> launchFcts = {};
-  for (py::object kernel : kernels) {
-    if (py::hasattr(kernel, "compile"))
+  for (nb::object kernel : kernels) {
+    if (nb::hasattr(kernel, "compile"))
       kernel.attr("compile")();
 
     // IMPORTANT: we need to make sure no Python data is accessed in the async.
     // functor.
     auto kernelMod =
-        wrap(unwrap(kernel.attr("module").cast<MlirModule>()).clone());
-    auto kernelName = kernel.attr("name").cast<std::string>();
+        wrap(unwrap(nb::cast<MlirModule>(kernel.attr("module"))).clone());
+    auto kernelName = nb::cast<std::string>(kernel.attr("name"));
     launchFcts.push_back(
         [kernelMod = std::move(kernelMod), kernelName](state state) mutable {
           cudaq::OpaqueArguments argData;
@@ -156,20 +158,20 @@ pyEvolveAsync(state initial_state, std::vector<py::object> kernels,
     spin_ops.push_back(std::move(ops));
   }
 
-  py::gil_scoped_release release;
+  nb::gil_scoped_release release;
   return __internal__::evolve_async(initial_state, launchFcts, spin_ops, qpu_id,
                                     noise_model, shots_count,
                                     save_intermediate_states);
 }
 
 /// @brief Bind the get_state cudaq function
-void bindPyEvolve(py::module &mod) {
+void bindPyEvolve(nb::module_ &mod) {
 
   // Note: vector versions need to be first, otherwise the incorrect
   // overload is used.
   mod.def(
       "evolve",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          bool save_intermediate_states = true) {
         return pyEvolve<long>(initial_state, kernels, {}, {}, -1,
                               save_intermediate_states);
@@ -177,7 +179,7 @@ void bindPyEvolve(py::module &mod) {
       "");
   mod.def(
       "evolve",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, long>> params,
          std::vector<spin_op_creator<long>> observables, int shots_count = -1,
          bool save_intermediate_states = true) {
@@ -187,7 +189,7 @@ void bindPyEvolve(py::module &mod) {
       "");
   mod.def(
       "evolve",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, double>> params,
          std::vector<spin_op_creator<double>> observables, int shots_count = -1,
          bool save_intermediate_states = true) {
@@ -197,7 +199,7 @@ void bindPyEvolve(py::module &mod) {
       "");
   mod.def(
       "evolve",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, std::complex<double>>> params,
          std::vector<spin_op_creator<std::complex<double>>> observables,
          int shots_count = -1, bool save_intermediate_states = true) {
@@ -207,13 +209,13 @@ void bindPyEvolve(py::module &mod) {
       "");
   mod.def(
       "evolve",
-      [](state initial_state, py::object kernel) {
+      [](state initial_state, nb::object kernel) {
         return pyEvolve(initial_state, kernel, std::map<std::string, long>{});
       },
       "");
   mod.def(
       "evolve",
-      [](state initial_state, py::object kernel,
+      [](state initial_state, nb::object kernel,
          std::map<std::string, long> params,
          std::vector<spin_op_creator<long>> observables, int shots_count = -1) {
         return pyEvolve(initial_state, kernel, params, observables,
@@ -222,7 +224,7 @@ void bindPyEvolve(py::module &mod) {
       "");
   mod.def(
       "evolve",
-      [](state initial_state, py::object kernel,
+      [](state initial_state, nb::object kernel,
          std::map<std::string, double> params,
          std::vector<spin_op_creator<double>> observables,
          int shots_count = -1) {
@@ -232,7 +234,7 @@ void bindPyEvolve(py::module &mod) {
       "");
   mod.def(
       "evolve",
-      [](state initial_state, py::object kernel,
+      [](state initial_state, nb::object kernel,
          std::map<std::string, std::complex<double>> params,
          std::vector<spin_op_creator<std::complex<double>>> observables,
          int shots_count = -1) {
@@ -245,19 +247,19 @@ void bindPyEvolve(py::module &mod) {
   // overload is used.
   mod.def(
       "evolve_async",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::size_t qpu_id,
          std::optional<cudaq::noise_model> noise_model = std::nullopt,
          bool save_intermediate_states = true) {
         return pyEvolveAsync<long>(initial_state, kernels, {}, {}, qpu_id,
                                    noise_model, -1, save_intermediate_states);
       },
-      py::arg("initial_state"), py::arg("kernels"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::kw_only(),
-      py::arg("save_intermediate_states") = true, "");
+      nb::arg("initial_state"), nb::arg("kernels"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::kw_only(),
+      nb::arg("save_intermediate_states") = true, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, long>> params,
          std::vector<spin_op_creator<long>> observables, std::size_t qpu_id,
          std::optional<cudaq::noise_model> noise_model = std::nullopt,
@@ -266,13 +268,13 @@ void bindPyEvolve(py::module &mod) {
                              qpu_id, noise_model, shots_count,
                              save_intermediate_states);
       },
-      py::arg("initial_state"), py::arg("kernels"), py::arg("params"),
-      py::arg("observables"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::arg("shots_count") = -1,
-      py::kw_only(), py::arg("save_intermediate_states") = true, "");
+      nb::arg("initial_state"), nb::arg("kernels"), nb::arg("params"),
+      nb::arg("observables"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::arg("shots_count") = -1,
+      nb::kw_only(), nb::arg("save_intermediate_states") = true, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, double>> params,
          std::vector<spin_op_creator<double>> observables, std::size_t qpu_id,
          std::optional<cudaq::noise_model> noise_model = std::nullopt,
@@ -281,13 +283,13 @@ void bindPyEvolve(py::module &mod) {
                              qpu_id, noise_model, shots_count,
                              save_intermediate_states);
       },
-      py::arg("initial_state"), py::arg("kernels"), py::arg("params"),
-      py::arg("observables"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::arg("shots_count") = -1,
-      py::kw_only(), py::arg("save_intermediate_states") = true, "");
+      nb::arg("initial_state"), nb::arg("kernels"), nb::arg("params"),
+      nb::arg("observables"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::arg("shots_count") = -1,
+      nb::kw_only(), nb::arg("save_intermediate_states") = true, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, std::vector<py::object> kernels,
+      [](state initial_state, std::vector<nb::object> kernels,
          std::vector<std::map<std::string, std::complex<double>>> params,
          std::vector<spin_op_creator<std::complex<double>>> observables,
          std::size_t qpu_id,
@@ -297,23 +299,23 @@ void bindPyEvolve(py::module &mod) {
                              qpu_id, noise_model, shots_count,
                              save_intermediate_states);
       },
-      py::arg("initial_state"), py::arg("kernels"), py::arg("params"),
-      py::arg("observables"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::arg("shots_count") = -1,
-      py::kw_only(), py::arg("save_intermediate_states") = true, "");
+      nb::arg("initial_state"), nb::arg("kernels"), nb::arg("params"),
+      nb::arg("observables"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::arg("shots_count") = -1,
+      nb::kw_only(), nb::arg("save_intermediate_states") = true, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, py::object kernel, std::size_t qpu_id,
+      [](state initial_state, nb::object kernel, std::size_t qpu_id,
          std::optional<cudaq::noise_model> noise_model = std::nullopt) {
         return pyEvolveAsync(initial_state, kernel,
                              std::map<std::string, long>{}, {}, qpu_id,
                              noise_model);
       },
-      py::arg("initial_state"), py::arg("kernel"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, "");
+      nb::arg("initial_state"), nb::arg("kernel"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, py::object kernel,
+      [](state initial_state, nb::object kernel,
          std::map<std::string, long> params,
          std::vector<spin_op_creator<long>> observables, std::size_t qpu_id,
          std::optional<cudaq::noise_model> noise_model = std::nullopt,
@@ -321,12 +323,12 @@ void bindPyEvolve(py::module &mod) {
         return pyEvolveAsync(initial_state, kernel, params, observables, qpu_id,
                              noise_model, shots_count);
       },
-      py::arg("initial_state"), py::arg("kernel"), py::arg("params"),
-      py::arg("observables"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::arg("shots_count") = -1, "");
+      nb::arg("initial_state"), nb::arg("kernel"), nb::arg("params"),
+      nb::arg("observables"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::arg("shots_count") = -1, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, py::object kernel,
+      [](state initial_state, nb::object kernel,
          std::map<std::string, double> params,
          std::vector<spin_op_creator<double>> observables, std::size_t qpu_id,
          std::optional<cudaq::noise_model> noise_model = std::nullopt,
@@ -334,12 +336,12 @@ void bindPyEvolve(py::module &mod) {
         return pyEvolveAsync(initial_state, kernel, params, observables, qpu_id,
                              noise_model, shots_count);
       },
-      py::arg("initial_state"), py::arg("kernel"), py::arg("params"),
-      py::arg("observables"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::arg("shots_count") = -1, "");
+      nb::arg("initial_state"), nb::arg("kernel"), nb::arg("params"),
+      nb::arg("observables"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::arg("shots_count") = -1, "");
   mod.def(
       "evolve_async",
-      [](state initial_state, py::object kernel,
+      [](state initial_state, nb::object kernel,
          std::map<std::string, std::complex<double>> params,
          std::vector<spin_op_creator<std::complex<double>>> observables,
          std::size_t qpu_id,
@@ -348,16 +350,16 @@ void bindPyEvolve(py::module &mod) {
         return pyEvolveAsync(initial_state, kernel, params, observables, qpu_id,
                              noise_model, shots_count);
       },
-      py::arg("initial_state"), py::arg("kernel"), py::arg("params"),
-      py::arg("observables"), py::arg("qpu_id") = 0,
-      py::arg("noise_model") = std::nullopt, py::arg("shots_count") = -1, "");
+      nb::arg("initial_state"), nb::arg("kernel"), nb::arg("params"),
+      nb::arg("observables"), nb::arg("qpu_id") = 0,
+      nb::arg("noise_model") = std::nullopt, nb::arg("shots_count") = -1, "");
   mod.def(
       "evolve_async",
       [](std::function<evolve_result()> evolveFunctor, std::size_t qpu_id = 0) {
-        py::gil_scoped_release release;
+        nb::gil_scoped_release release;
         return __internal__::evolve_async(evolveFunctor, qpu_id);
       },
-      py::arg("evolve_function"), py::arg("qpu_id") = 0);
+      nb::arg("evolve_function"), nb::arg("qpu_id") = 0);
 }
 
 } // namespace cudaq

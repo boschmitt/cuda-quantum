@@ -9,13 +9,14 @@
 #include "cudaq/algorithms/run.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include <future>
-#include <pybind11/complex.h>
-#include <pybind11/functional.h>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -23,14 +24,14 @@
 namespace cudaq {
 namespace details {
 
-std::vector<py::object> readRunResults(mlir::ModuleOp module,
+std::vector<nb::object> readRunResults(mlir::ModuleOp module,
                                        mlir::func::FuncOp kernelFuncOp,
                                        mlir::Type ty, RunResultSpan &results,
                                        std::size_t count) {
-  std::vector<py::object> ret;
+  std::vector<nb::object> ret;
   std::size_t byteSize = results.lengthInBytes / count;
   for (std::size_t i = 0; i < results.lengthInBytes; i += byteSize) {
-    py::object obj = convertResult(module, kernelFuncOp, ty, results.data + i);
+    nb::object obj = convertResult(module, kernelFuncOp, ty, results.data + i);
     ret.push_back(obj);
   }
   return ret;
@@ -38,20 +39,21 @@ std::vector<py::object> readRunResults(mlir::ModuleOp module,
 
 static std::tuple<std::string, MlirModule, OpaqueArguments *,
                   mlir::func::FuncOp>
-getKernelLaunchParameters(py::object &kernel, py::args args) {
-  if (py::len(kernel.attr("arguments")) != args.size())
+getKernelLaunchParameters(nb::object &kernel, nb::args args) {
+  nb::object kernel_args = kernel.attr("arguments");
+  if (nb::len(kernel_args) != args.size())
     throw std::runtime_error("Invalid number of arguments passed to run:" +
                              std::to_string(args.size()) + " expected " +
-                             std::to_string(py::len(kernel.attr("arguments"))));
+                             std::to_string(nb::len(kernel_args)));
 
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto kernelName = kernel.attr("name").cast<std::string>();
-  if (!py::hasattr(kernel, "module") || kernel.attr("module").is_none())
+  auto kernelName = nb::cast<std::string>(kernel.attr("name"));
+  if (!nb::hasattr(kernel, "module") || kernel.attr("module").is_none())
     throw std::runtime_error(
         "Unsupported target / Invalid kernel for `run`: missing module");
-  auto kernelMod = kernel.attr("module").cast<MlirModule>();
+  auto kernelMod = nb::cast<MlirModule>(kernel.attr("module"));
   args = simplifiedValidateInputArguments(args);
   auto *argData = toOpaqueArgs(args, kernelMod, kernelName);
 
@@ -72,7 +74,7 @@ RunResultSpan pyRunTheKernel(const std::string &name, MlirModule module,
 
   auto returnTy = returnTypes[0];
   // Disallow returning list / vectors from entry-point kernels.
-  if (returnTy.isa<cudaq::cc::StdvecType>()) {
+  if (isa<cudaq::cc::StdvecType>(returnTy)) {
     throw std::runtime_error("`cudaq.run` does not yet support returning "
                              "`list` from entry-point kernels.");
   }
@@ -93,7 +95,7 @@ RunResultSpan pyRunTheKernel(const std::string &name, MlirModule module,
   return results;
 }
 
-std::vector<py::object> pyReadResults(RunResultSpan results, MlirModule module,
+std::vector<nb::object> pyReadResults(RunResultSpan results, MlirModule module,
                                       func::FuncOp funcOp,
                                       std::size_t shots_count) {
   auto mod = unwrap(module);
@@ -106,7 +108,7 @@ std::vector<py::object> pyReadResults(RunResultSpan results, MlirModule module,
 } // namespace details
 
 /// @brief Run `cudaq::run` on the provided kernel.
-std::vector<py::object> pyRun(py::object &kernel, py::args args,
+std::vector<nb::object> pyRun(nb::object &kernel, nb::args args,
                               std::size_t shots_count,
                               std::optional<noise_model> noise_model) {
   if (shots_count == 0)
@@ -142,12 +144,12 @@ std::vector<py::object> pyRun(py::object &kernel, py::args args,
 // When the `ready` future is set, the content of the buffer is filled.
 struct async_run_result {
   std::future<void> ready;
-  std::vector<py::object> *results;
+  std::vector<nb::object> *results;
   std::string *error;
 };
 
 /// @brief Run `cudaq::run_async` on the provided kernel.
-async_run_result pyRunAsync(py::object &kernel, py::args args,
+async_run_result pyRunAsync(nb::object &kernel, nb::args args,
                             std::size_t shots_count,
                             std::optional<noise_model> noise_model,
                             std::size_t qpu_id) {
@@ -170,7 +172,7 @@ async_run_result pyRunAsync(py::object &kernel, py::args args,
         "Noise model is not supported on remote platforms.");
 
   async_run_result result;
-  result.results = new std::vector<py::object>();
+  result.results = new std::vector<nb::object>();
   result.error = new std::string();
 
   if (shots_count == 0) {
@@ -190,7 +192,7 @@ async_run_result pyRunAsync(py::object &kernel, py::args args,
   {
     // Release GIL to allow c++ threads, all code inside the scope is c++, so
     // there is no need to re-acquire the GIL inside the thread.
-    py::gil_scoped_release gil_release{};
+    nb::gil_scoped_release gil_release{};
     QuantumTask wrapped = detail::make_copyable_function(
         [sp = std::move(spanPromise), ep = std::move(errorPromise), shots_count,
          qpu_id, argData, name, module, func,
@@ -221,7 +223,7 @@ async_run_result pyRunAsync(py::object &kernel, py::args args,
   {
     // Release GIL to allow c++ threads, re-acquire for conversion of the
     // results to python objects.
-    py::gil_scoped_release gil_release{};
+    nb::gil_scoped_release gil_release{};
     auto resultFuture =
         std::async(std::launch::deferred,
                    [sf = std::move(spanFuture), ef = std::move(errorFuture),
@@ -231,7 +233,7 @@ async_run_result pyRunAsync(py::object &kernel, py::args args,
                      std::swap(*errorPtr, error);
                      if (error.empty()) {
                        auto span = sf.get();
-                       py::gil_scoped_acquire gil{};
+                       nb::gil_scoped_acquire gil{};
                        auto results = details::pyReadResults(span, module, func,
                                                              shots_count);
                        std::swap(*resultsPtr, results);
@@ -244,9 +246,9 @@ async_run_result pyRunAsync(py::object &kernel, py::args args,
 }
 
 /// @brief Bind the run cudaq function.
-void bindPyRun(py::module &mod) {
-  mod.def("run", &pyRun, py::arg("kernel"), py::kw_only(),
-          py::arg("shots_count") = 100, py::arg("noise_model") = py::none(),
+void bindPyRun(nb::module_ &mod) {
+  mod.def("run", &pyRun, nb::arg("kernel"), nb::arg("args"), nb::kw_only(),
+          nb::arg("shots_count") = 100, nb::arg("noise_model") = nb::none(),
           R"#(Run the provided `kernel` with the given kernel arguments over 
 the specified number of circuit executions (`shots_count`).
 
@@ -262,8 +264,8 @@ Returns:
 }
 
 /// @brief Bind the run_async cudaq function.
-void bindPyRunAsync(py::module &mod) {
-  py::class_<async_run_result>(mod, "AsyncRunResult", "")
+void bindPyRunAsync(nb::module_ &mod) {
+  nb::class_<async_run_result>(mod, "AsyncRunResult", "")
       .def(
           "get",
           [](async_run_result &self) {
@@ -278,9 +280,9 @@ void bindPyRunAsync(py::module &mod) {
             return ret;
           },
           "");
-  mod.def("run_async_internal", &pyRunAsync, py::arg("kernel"), py::kw_only(),
-          py::arg("shots_count") = 100, py::arg("noise_model") = py::none(),
-          py::arg("qpu_id") = 0,
+  mod.def("run_async_internal", &pyRunAsync, nb::arg("kernel"), nb::arg("args"), nb::kw_only(),
+          nb::arg("shots_count") = 100, nb::arg("noise_model") = nb::none(),
+          nb::arg("qpu_id") = 0,
           R"#(Run the provided `kernel` with the given kernel arguments over 
 the specified number of circuit executions (`shots_count`) asynchronously on the 
 specified `qpu_id`.

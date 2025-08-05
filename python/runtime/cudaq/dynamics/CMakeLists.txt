@@ -11,7 +11,7 @@ find_package(CUDAToolkit REQUIRED)
 nanobind_add_module(nvqir_dynamics_bindings pyDynamics.cpp)
 target_include_directories(nvqir_dynamics_bindings PRIVATE
     ${PYTHON_INCLUDE_DIRS}
-    ${pybind11_INCLUDE_DIRS}
+    ${nanobind_INCLUDE_DIRS}
 )
 find_file(CUDENSITYMAT_INC
     NAMES   cudensitymat.h

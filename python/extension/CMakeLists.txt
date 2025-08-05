@@ -13,6 +13,12 @@ endif()
 include(HandleLLVMOptions)
 include(AddMLIRPython)
 
+include_directories(
+  ${CMAKE_SOURCE_DIR}/python 
+  ${CMAKE_SOURCE_DIR}/python/utils
+  ${CMAKE_SOURCE_DIR}/runtime
+)
+
 # Specifies that all MLIR packages are co-located under the cudaq
 # top level package (the API has been embedded in a relocatable way).
 add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=cudaq.mlir.")
@@ -110,6 +116,15 @@ declare_mlir_python_extension(CUDAQuantumPythonSources.Extension
   PYTHON_BINDINGS_LIBRARY nanobind
 )
 
+target_link_libraries(CUDAQuantumPythonSources.Extension INTERFACE 
+    cudaq 
+    cudaq-common 
+    cudaq-em-default
+    cudaq-em-photonics
+    fmt::fmt-header-only
+    unzip_util
+)
+
 ################################################################################
 # Components
 ################################################################################
@@ -119,7 +134,7 @@ set(_SOURCE_COMPONENTS
 
   # FIXME: We don't need to register everything.
   MLIRPythonExtension.RegisterEverything
-  MLIRPythonSources.Core
+  MLIRPythonSources
 )
 
 ################################################################################

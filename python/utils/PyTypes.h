@@ -9,22 +9,21 @@
 #pragma once
 
 #include <complex>
-#include <pybind11/complex.h>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
 namespace py_ext {
 
 /// Extended python complex object.
 ///
 /// Includes `complex`, `numpy.complex64`, `numpy.complex128`.
-class Complex : public pybind11::object {
+class Complex : public nanobind::object {
 public:
-  PYBIND11_OBJECT_CVT(Complex, object, isComplex_, convert_)
+  NB_OBJECT_DEFAULT(Complex, object, "Complex", isComplex_)
 
   Complex(double real, double imag)
-      : object(PyComplex_FromDoubles(real, imag), stolen_t{}) {
+      : object(nanobind::steal(PyComplex_FromDoubles(real, imag))) {
     if (!m_ptr) {
-      pybind11::pybind11_fail("Could not allocate complex object!");
+      throw std::runtime_error("Could not allocate complex object!");
     }
   }
 
@@ -59,39 +58,27 @@ public:
     }
     return false;
   }
-
-  static PyObject *convert_(PyObject *o) {
-    PyObject *ret = nullptr;
-    if (isComplex_(o)) {
-      double real = PyComplex_RealAsDouble(o);
-      double imag = PyComplex_ImagAsDouble(o);
-      ret = PyComplex_FromDoubles(real, imag);
-    } else {
-      pybind11::set_error(PyExc_TypeError, "Unexpected type");
-    }
-    return ret;
-  }
 };
 
 /// Extended python float object.
 ///
 /// Includes `float`, `numpy.float64`, `numpy.float32`.
-class Float : public pybind11::object {
+class Float : public nanobind::object {
 public:
-  PYBIND11_OBJECT_CVT(Float, object, isFloat_, convert_)
+  NB_OBJECT_DEFAULT(Float, object, "Float", isFloat_)
 
   // Allow implicit conversion from float/double:
   // NOLINTNEXTLINE(google-explicit-constructor)
-  Float(float value) : object(PyFloat_FromDouble((double)value), stolen_t{}) {
+  Float(float value) : object(nanobind::steal(PyFloat_FromDouble((double)value))) {
     if (!m_ptr) {
-      pybind11::pybind11_fail("Could not allocate float object!");
+      throw std::runtime_error("Could not allocate float object!");
     }
   }
   // NOLINTNEXTLINE(google-explicit-constructor)
   Float(double value = .0)
-      : object(PyFloat_FromDouble((double)value), stolen_t{}) {
+      : object(nanobind::steal(PyFloat_FromDouble((double)value))) {
     if (!m_ptr) {
-      pybind11::pybind11_fail("Could not allocate float object!");
+      throw std::runtime_error("Could not allocate float object!");
     }
   }
   // NOLINTNEXTLINE(google-explicit-constructor)
@@ -110,30 +97,20 @@ public:
     }
     return false;
   }
-
-  static PyObject *convert_(PyObject *o) {
-    PyObject *ret = nullptr;
-    if (isFloat_(o)) {
-      ret = PyFloat_FromDouble(PyFloat_AsDouble(o));
-    } else {
-      pybind11::set_error(PyExc_TypeError, "Unexpected type");
-    }
-    return ret;
-  }
 };
 
 /// Extended python int object.
 ///
 /// Includes `int`, `numpy.intXXX`.
-class Int : public pybind11::object {
+class Int : public nanobind::object {
 public:
-  PYBIND11_OBJECT_CVT(Int, object, isInt_, convert_)
+  NB_OBJECT_DEFAULT(Int, object, "Int", isInt_)
 
   // Allow implicit conversion from int:
   // NOLINTNEXTLINE(google-explicit-constructor)
-  Int(long value) : object(PyLong_FromLong((long)value), stolen_t{}) {
+  Int(long value) : object(nanobind::steal(PyLong_FromLong((long)value))) {
     if (!m_ptr) {
-      pybind11::pybind11_fail("Could not allocate float object!");
+      throw std::runtime_error("Could not allocate int object!");
     }
   }
 
@@ -158,16 +135,6 @@ public:
     }
     return false;
   }
-
-  static PyObject *convert_(PyObject *o) {
-    PyObject *ret = nullptr;
-    if (isInt_(o)) {
-      ret = PyLong_FromLong(PyLong_AsLong(o));
-    } else {
-      pybind11::set_error(PyExc_TypeError, "Unexpected type");
-    }
-    return ret;
-  }
 };
 
 template <typename T>
@@ -187,79 +154,79 @@ inline char const *typeName<py_ext::Int>() {
   return "long";
 }
 template <>
-inline char const *typeName<pybind11::int_>() {
+inline char const *typeName<nanobind::int_>() {
   return "long";
 }
 template <>
-inline char const *typeName<pybind11::bool_>() {
+inline char const *typeName<nanobind::bool_>() {
   return "bool";
 }
 template <>
-inline char const *typeName<pybind11::list>() {
+inline char const *typeName<nanobind::list>() {
   return "list";
 }
 
-template <typename T, pybind11::detail::enable_if_t<
-                          std::is_base_of<pybind11::object, T>::value, int> = 0>
-inline bool isConvertible(pybind11::handle o) {
-  return pybind11::isinstance<T>(o);
+template <typename T,
+          typename std::enable_if<std::is_base_of<nanobind::object, T>::value, int>::type = 0>
+inline bool isConvertible(nanobind::handle o) {
+    return nanobind::isinstance<T>(o);
 }
 template <>
-inline bool isConvertible<Complex>(pybind11::handle o) {
-  return pybind11::isinstance<Complex>(o) || pybind11::isinstance<Float>(o) ||
-         pybind11::isinstance<pybind11::int_>(o);
+inline bool isConvertible<Complex>(nanobind::handle o) {
+  return nanobind::isinstance<Complex>(o) || nanobind::isinstance<Float>(o) ||
+         nanobind::isinstance<nanobind::int_>(o);
 }
 template <>
-inline bool isConvertible<Float>(pybind11::handle o) {
-  return pybind11::isinstance<Float>(o) ||
-         pybind11::isinstance<pybind11::int_>(o);
+inline bool isConvertible<Float>(nanobind::handle o) {
+  return nanobind::isinstance<Float>(o) ||
+         nanobind::isinstance<nanobind::int_>(o);
 }
 
 template <typename T>
-inline pybind11::object convert(T value) = delete;
+inline nanobind::object convert(T value) = delete;
 
 template <>
-inline pybind11::object convert(bool value) {
-  return pybind11::bool_(value);
+inline nanobind::object convert(bool value) {
+  return nanobind::bool_(value);
 }
 
 template <>
-inline pybind11::object convert(std::int8_t value) {
-  return pybind11::int_(value);
+inline nanobind::object convert(std::int8_t value) {
+  return nanobind::int_(value);
 }
 
 template <>
-inline pybind11::object convert(std::int16_t value) {
-  return pybind11::int_(value);
+inline nanobind::object convert(std::int16_t value) {
+  return nanobind::int_(value);
 }
 
 template <>
-inline pybind11::object convert(std::int32_t value) {
-  return pybind11::int_(value);
+inline nanobind::object convert(std::int32_t value) {
+  return nanobind::int_(value);
 }
 
 template <>
-inline pybind11::object convert(std::int64_t value) {
-  return pybind11::int_(value);
+inline nanobind::object convert(std::int64_t value) {
+  return nanobind::int_(value);
 }
 
 template <>
-inline pybind11::object convert(float value) {
+inline nanobind::object convert(float value) {
   return Float(value);
 }
 
 template <>
-inline pybind11::object convert(double value) {
+inline nanobind::object convert(double value) {
   return Float(value);
 }
 
 template <>
-inline pybind11::object convert(std::complex<float> value) {
+inline nanobind::object convert(std::complex<float> value) {
   return Complex(value);
 }
 
 template <>
-inline pybind11::object convert(std::complex<double> value) {
+inline nanobind::object convert(std::complex<double> value) {
   return Complex(value);
 }
 

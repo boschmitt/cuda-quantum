@@ -4666,7 +4666,9 @@ def compile_to_mlir(astModule, capturedDataStorage: CapturedDataStorage,
         context=bridge.ctx)
 
     try:
-        pm.run(bridge.module)
+        # TODO: It seems `#include "mlir/Bindings/Python/NanobindAdaptors.h"` is missing somewhere, 
+        # so we need to run the pass manager on the operation instead of the module, hence the `.operation`.
+        pm.run(bridge.module.operation)
     except:
         raise RuntimeError("could not compile code for '{}'.".format(
             bridge.name))

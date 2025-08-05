@@ -12,14 +12,14 @@
 #include "cudaq/algorithms/run.h"
 #include "utils/OpaqueArguments.h"
 #include "utils/PyTypes.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
-#include <pybind11/complex.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 #include <string>
 #include <vector>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq {
 
@@ -28,7 +28,7 @@ void setDataLayout(MlirModule module);
 
 /// @brief Create a new OpaqueArguments pointer and pack the
 /// python arguments in it. Clients must delete the memory.
-OpaqueArguments *toOpaqueArgs(py::args &args, MlirModule mod,
+OpaqueArguments *toOpaqueArgs(nb::args &args, MlirModule mod,
                               const std::string &name);
 
 inline std::size_t byteSize(mlir::Type ty) {
@@ -43,7 +43,7 @@ inline std::size_t byteSize(mlir::Type ty) {
 }
 
 /// @brief Convert raw return of kernel to python object.
-py::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
+nb::object convertResult(mlir::ModuleOp module, mlir::func::FuncOp kernelFuncOp,
                          mlir::Type ty, char *data);
 
 /// @brief Launch python kernel with arguments.
@@ -64,5 +64,5 @@ void pyLaunchKernel(const std::string &name, KernelThunkType thunk,
                     void *rawArgs, std::size_t size, std::uint32_t returnOffset,
                     const std::vector<std::string> &names);
 
-void bindAltLaunchKernel(py::module &mod);
+void bindAltLaunchKernel(nb::module_ &mod);
 } // namespace cudaq

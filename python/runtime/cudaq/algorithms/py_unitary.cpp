@@ -12,15 +12,14 @@
 #include "runtime/cudaq/operators/py_helpers.h"
 #include "runtime/cudaq/platform/py_alt_launch_kernel.h"
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
-#include <pybind11/complex.h>
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
-namespace py = pybind11;
+#include <nanobind/stl/complex.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
+namespace nb = nanobind;
 
 namespace cudaq {
 
-py::array pyGetUnitary(py::object &kernel, py::args args) {
+nb::ndarray<nb::numpy, std::complex<double>, nb::ndim<2>> pyGetUnitary(nb::object &kernel, nb::args args) {
   // Prepare kernel launch parameters (see py_draw.cpp for pattern)
   auto [kernelName, kernelMod, argData] =
       details::getKernelLaunchParameters(kernel, args);
@@ -35,7 +34,7 @@ py::array pyGetUnitary(py::object &kernel, py::args args) {
 }
 
 /// @brief Bind the get_unitary cudaq function
-void bindPyUnitary(py::module &mod) {
+void bindPyUnitary(nb::module_ &mod) {
   mod.def(
       "get_unitary", &pyGetUnitary,
       R"#(Return the unitary matrix of the execution path of the provided kernel.

@@ -8,11 +8,11 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq {
 /// @brief Bind `cudaq::vqe` to python.
-void bindVQE(py::module &mod);
+void bindVQE(nb::module_ &mod);
 } // namespace cudaq

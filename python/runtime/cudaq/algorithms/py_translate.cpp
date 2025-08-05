@@ -10,10 +10,9 @@
 #include "cudaq/Optimizer/CodeGen/Pipelines.h"
 #include "cudaq/algorithms/draw.h" // TODO  translate.h
 #include "utils/OpaqueArguments.h"
-#include "mlir/Bindings/Python/PybindAdaptors.h"
 #include <iostream>
-#include <pybind11/complex.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/string.h>
 
 namespace cudaq {
 std::string getQIR(const std::string &name, MlirModule module,
@@ -24,14 +23,14 @@ std::string getASM(const std::string &name, MlirModule module,
                    cudaq::OpaqueArguments &runtimeArgs);
 
 /// @brief Run `cudaq::translate` on the provided kernel.
-std::string pyTranslate(py::object &kernel, py::args args,
+std::string pyTranslate(nb::object &kernel, nb::args args,
                         const std::string &format) {
 
-  if (py::hasattr(kernel, "compile"))
+  if (nb::hasattr(kernel, "compile"))
     kernel.attr("compile")();
 
-  auto name = kernel.attr("name").cast<std::string>();
-  auto module = kernel.attr("module").cast<MlirModule>();
+  auto name = nb::cast<std::string>(kernel.attr("name"));
+  auto module = nb::cast<MlirModule>(kernel.attr("module"));
 
   auto result =
       llvm::StringSwitch<std::function<std::string()>>(format)
@@ -48,10 +47,11 @@ std::string pyTranslate(py::object &kernel, py::args args,
                  })
           .Case("openqasm2",
                 [&]() {
-                  if (py::hasattr(kernel, "arguments") &&
-                      py::len(kernel.attr("arguments")) > 0) {
-                    throw std::runtime_error("Cannot translate function with "
-                                             "arguments to OpenQASM 2.0.");
+                  if (nb::hasattr(kernel, "arguments")) {
+                    nb::object kernel_args = kernel.attr("arguments");
+                    if (nb::len(kernel_args) > 0)
+                      throw std::runtime_error("Cannot translate function with "
+                                              "arguments to OpenQASM 2.0.");
                   }
                   cudaq::OpaqueArguments args;
                   return getASM(name, module, args);
@@ -66,10 +66,10 @@ std::string pyTranslate(py::object &kernel, py::args args,
 }
 
 /// @brief Bind the translate cudaq function
-void bindPyTranslate(py::module &mod) {
+void bindPyTranslate(nb::module_ &mod) {
   mod.def(
-      "translate", &pyTranslate, py::arg("kernel"), py::kw_only(),
-      py::arg("format") = "qir",
+      "translate", &pyTranslate, nb::arg("kernel"), nb::arg("args"), nb::kw_only(),
+      nb::arg("format") = "qir",
       R"#(Return a UTF-8 encoded string representing drawing of the execution
 path, i.e., the trace, of the provided `kernel`.
 

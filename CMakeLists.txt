@@ -283,6 +283,7 @@ if (CUDAQ_ENABLE_PYTHON)
     OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT)
 
   find_package(nanobind CONFIG REQUIRED)
+  set(nanobind_INCLUDE_DIRS  ${nanobind_ROOT}/../include CACHE INTERNAL "")
 endif()
 
 # MLIR/LLVM Dependency

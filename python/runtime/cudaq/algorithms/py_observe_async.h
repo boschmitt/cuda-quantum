@@ -8,10 +8,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq {
-void bindObserveAsync(py::module &mod);
+void bindObserveAsync(nb::module_ &mod);
 } // namespace cudaq

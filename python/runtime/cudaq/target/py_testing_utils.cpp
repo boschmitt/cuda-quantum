@@ -11,9 +11,10 @@
 #include "cudaq.h"
 #include "cudaq/platform.h"
 #include "nvqir/CircuitSimulator.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-namespace py = pybind11;
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+
+namespace nb = nanobind;
 
 namespace nvqir {
 void toggleDynamicQubitManagement();
@@ -21,12 +22,12 @@ void toggleDynamicQubitManagement();
 
 namespace cudaq {
 
-void bindTestUtils(py::module &mod, LinkedLibraryHolder &holder) {
+void bindTestUtils(nb::module_ &mod, LinkedLibraryHolder &holder) {
   auto testingSubmodule = mod.def_submodule("testing");
 
   /// NOTE: "ExecutionContext" is already registered in
   /// python/runtime/common/py_ExecutionContext.cpp
-  // // py::class_<ExecutionContext>(testingSubmodule, "ExecutionContext", "");
+  // // nb::class_<ExecutionContext>(testingSubmodule, "ExecutionContext", "");
 
   // Vision for all this
   //
@@ -57,7 +58,7 @@ void bindTestUtils(py::module &mod, LinkedLibraryHolder &holder) {
     holder.getSimulator(simName)->deallocateQubits(qubits);
     holder.getSimulator(simName)->resetExecutionContext();
     nvqir::toggleDynamicQubitManagement();
-    // Pybind will delete the context bc its been wrapped in a unique_ptr
+    // nanobind will delete the context bc its been wrapped in a unique_ptr
     return context->result;
   });
 }

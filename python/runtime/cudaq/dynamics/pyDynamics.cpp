@@ -15,10 +15,14 @@
 #include "cudaq/algorithms/base_integrator.h"
 #include "cudaq/algorithms/integrator.h"
 #include "cudaq/schedule.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/optional.h>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 namespace {
 cudaq::CuDensityMatState *asCudmState(cudaq::state &cudaqState) {
   auto *simState = cudaq::state_helper::getSimulationState(&cudaqState);
@@ -30,7 +34,7 @@ cudaq::CuDensityMatState *asCudmState(cudaq::state &cudaqState) {
 } // namespace
 
 // Internal dynamics bindings
-PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
+NB_MODULE(nvqir_dynamics_bindings, m) {
   class PyCuDensityMatTimeStepper : public cudaq::CuDensityMatTimeStepper {
   public:
     PyCuDensityMatTimeStepper(cudensitymatHandle_t handle,
@@ -42,8 +46,8 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
   };
 
   // Time stepper bindings
-  py::class_<PyCuDensityMatTimeStepper>(m, "TimeStepper")
-      .def(py::init(
+  nb::class_<PyCuDensityMatTimeStepper>(m, "TimeStepper")
+      .def(nb::init(
           [](cudaq::schedule schedule, std::vector<int64_t> modeExtents,
              cudaq::sum_op<cudaq::matrix_handler> hamiltonian,
              std::vector<cudaq::sum_op<cudaq::matrix_handler>> collapse_ops,
@@ -61,7 +65,7 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
                 cudaq::dynamics::Context::getCurrentContext()->getHandle(),
                 liouvillian, schedule);
           }))
-      .def(py::init([](cudaq::schedule schedule,
+      .def(nb::init([](cudaq::schedule schedule,
                        std::vector<int64_t> modeExtents,
                        cudaq::super_op superOp) {
         std::unordered_map<std::string, std::complex<double>> params;
@@ -76,7 +80,7 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
             cudaq::dynamics::Context::getCurrentContext()->getHandle(),
             liouvillian, schedule);
       }))
-      .def(py::init([](cudaq::schedule schedule,
+      .def(nb::init([](cudaq::schedule schedule,
                        std::vector<int64_t> modeExtents,
                        const std::vector<cudaq::sum_op<cudaq::matrix_handler>>
                            &hamiltonians,
@@ -97,7 +101,7 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
             cudaq::dynamics::Context::getCurrentContext()->getHandle(),
             liouvillian, schedule);
       }))
-      .def(py::init([](cudaq::schedule schedule,
+      .def(nb::init([](cudaq::schedule schedule,
                        std::vector<int64_t> modeExtents,
                        const std::vector<cudaq::super_op> &superOps) {
         std::unordered_map<std::string, std::complex<double>> params;
@@ -122,8 +126,8 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
       });
 
   // System dynamics data class
-  py::class_<cudaq::SystemDynamics>(m, "SystemDynamics")
-      .def(py::init<>())
+  nb::class_<cudaq::SystemDynamics>(m, "SystemDynamics")
+      .def(nb::init<>())
       .def_readwrite("modeExtents", &cudaq::SystemDynamics::modeExtents)
       .def_readwrite("hamiltonian", &cudaq::SystemDynamics::hamiltonian)
       .def_readwrite("collapseOps", &cudaq::SystemDynamics::collapseOps)
@@ -131,8 +135,8 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
       .def_readwrite("superOp", &cudaq::SystemDynamics::superOp);
 
   // Expectation calculation
-  py::class_<cudaq::CuDensityMatExpectation>(m, "CuDensityMatExpectation")
-      .def(py::init([](cudaq::sum_op<cudaq::matrix_handler> &obs,
+  nb::class_<cudaq::CuDensityMatExpectation>(m, "CuDensityMatExpectation")
+      .def(nb::init([](cudaq::sum_op<cudaq::matrix_handler> &obs,
                        const std::vector<int64_t> &modeExtents) {
         return cudaq::CuDensityMatExpectation(
             cudaq::dynamics::Context::getCurrentContext()->getHandle(),
@@ -158,8 +162,8 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
       });
 
   // Schedule class
-  py::class_<cudaq::schedule>(m, "Schedule")
-      .def(py::init<const std::vector<double> &,
+  nb::class_<cudaq::schedule>(m, "Schedule")
+      .def(nb::init<const std::vector<double> &,
                     const std::vector<std::string> &>());
 
   // Helper to initialize a data buffer state
@@ -246,23 +250,23 @@ PYBIND11_MODULE(nvqir_dynamics_bindings, m) {
         return cudaq::__internal__::checkBatchingCompatibility(hamOps,
                                                                listCollapseOps);
       },
-      py::arg("hamiltonians"), py::arg("collapse_operators"));
+      nb::arg("hamiltonians"), nb::arg("collapse_operators"));
 
   m.def(
       "checkSuperOpBatchingCompatibility",
       [](const std::vector<cudaq::super_op> &super_operators) {
         return cudaq::__internal__::checkBatchingCompatibility(super_operators);
       },
-      py::arg("super_operators"));
+      nb::arg("super_operators"));
 
   auto integratorsSubmodule = m.def_submodule("integrators");
 
   // Runge-Kutta integrator
-  py::class_<cudaq::integrators::runge_kutta>(integratorsSubmodule,
+  nb::class_<cudaq::integrators::runge_kutta>(integratorsSubmodule,
                                               "runge_kutta")
-      .def(py::init<int, std::optional<double>>(), py::kw_only(),
-           py::arg("order") = cudaq::integrators::runge_kutta::default_order,
-           py::arg("max_step_size") = py::none())
+      .def(nb::init<int, std::optional<double>>(), nb::kw_only(),
+           nb::arg("order") = cudaq::integrators::runge_kutta::default_order,
+           nb::arg("max_step_size") = nb::none())
       .def("setState",
            [](cudaq::integrators::runge_kutta &self, cudaq::state &state,
               double t) { self.setState(state, t); })

@@ -9,10 +9,10 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 add_compile_options(-Wno-attributes)
 add_library(cudaq-python-interop SHARED PythonCppInterop.cpp)
 target_include_directories(cudaq-python-interop PRIVATE
-    ${PYTHON_INCLUDE_DIRS}
+    ${Python_INCLUDE_DIRS}
     ${nanobind_INCLUDE_DIRS}
 )
-target_link_libraries(cudaq-python-interop PRIVATE nanobind::module cudaq)
+target_link_libraries(cudaq-python-interop PRIVATE cudaq)
 install (FILES PythonCppInterop.h DESTINATION include/cudaq/python/)
 
 install(TARGETS cudaq-python-interop EXPORT cudaq-python-interop-targets DESTINATION lib)

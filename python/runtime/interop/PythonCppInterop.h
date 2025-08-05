@@ -7,9 +7,10 @@
  ******************************************************************************/
 #pragma once
 
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
+#include <vector>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace cudaq::python {
 
@@ -17,14 +18,14 @@ namespace cudaq::python {
 /// @brief A C++ wrapper for a Python object representing a CUDA-Q kernel.
 class CppPyKernelDecorator {
 private:
-  py::object kernel;
+  nb::object kernel;
 
 public:
   /// @brief Constructor for CppPyKernelDecorator.
   /// @param obj A Python object representing a CUDA-Q kernel.
   /// @throw std::runtime_error if the object is not a valid CUDA-Q kernel.
-  CppPyKernelDecorator(py::object obj) : kernel(obj) {
-    if (!py::hasattr(obj, "compile"))
+  CppPyKernelDecorator(nb::object obj) : kernel(obj) {
+    if (!nb::hasattr(obj, "compile"))
       throw std::runtime_error("Invalid python kernel object passed, must be "
                                "annotated with cudaq.kernel");
   }
@@ -34,7 +35,7 @@ public:
 
   /// @brief Gets the name of the kernel.
   /// @return The name of the kernel as a string.
-  std::string name() const { return kernel.attr("name").cast<std::string>(); }
+  std::string name() const { return nb::cast<std::string>(kernel.attr("name")); }
 
   /// @brief Merges the kernel with another module.
   /// @param otherModuleStr The string representation of the other module.
@@ -55,9 +56,8 @@ public:
   /// @return A function pointer to the extracted C function.
   template <typename... Args>
   auto extract_c_function_pointer(const std::string &kernelName) {
-    auto capsule = kernel.attr("extract_c_function_pointer")(kernelName)
-                       .cast<py::capsule>();
-    void *ptr = capsule;
+    auto capsule = nb::cast<nb::capsule>(kernel.attr("extract_c_function_pointer")(kernelName));
+    void *ptr = capsule.data();
     void (*entryPointPtr)(Args &&...) =
         reinterpret_cast<void (*)(Args &&...)>(ptr);
     return *entryPointPtr;
@@ -66,7 +66,7 @@ public:
   /// @brief Gets the Quake representation of the kernel.
   /// @return The Quake representation as a string.
   std::string get_quake() {
-    return kernel.attr("__str__")().cast<std::string>();
+    return nb::cast<std::string>(kernel.attr("__str__")());
   }
 };
 
@@ -146,7 +146,7 @@ std::string getMangledArgsString() {
 /// @param kernelName The name of the kernel
 /// @param docstring The documentation string for the kernel
 template <typename... Signature>
-void addDeviceKernelInterop(py::module_ &m, const std::string &modName,
+void addDeviceKernelInterop(nb::module_ &m, const std::string &modName,
                             const std::string &kernelName,
                             const std::string &docstring) {
 
@@ -154,15 +154,15 @@ void addDeviceKernelInterop(py::module_ &m, const std::string &modName,
 
   // FIXME Maybe Add replacement options (i.e., _pycudaq -> cudaq)
 
-  py::module_ sub;
-  if (py::hasattr(m, modName.c_str()))
-    sub = m.attr(modName.c_str()).cast<py::module_>();
+  nb::module_ sub;
+  if (nb::hasattr(m, modName.c_str()))
+    sub = nb::cast<nb::module_>(m.attr(modName.c_str()));
   else
     sub = m.def_submodule(modName.c_str());
 
   sub.def(
       kernelName.c_str(), [](Signature...) {}, docstring.c_str());
-  cudaq::python::registerDeviceKernel(sub.attr("__name__").cast<std::string>(),
+  cudaq::python::registerDeviceKernel(nb::cast<std::string>(sub.attr("__name__")),
                                       kernelName, mangledArgs);
   return;
 }

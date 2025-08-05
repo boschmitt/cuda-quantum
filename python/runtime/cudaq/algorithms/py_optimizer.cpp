@@ -5,8 +5,9 @@
  * This source code and the accompanying materials are made available under    *
  * the terms of the Apache License 2.0 which accompanies this distribution.    *
  ******************************************************************************/
-#include <pybind11/functional.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
 #include "common/JsonConvert.h"
 #include "common/SerializedCodeExecutionContext.h"
@@ -25,11 +26,11 @@ static SerializedCodeExecutionContext
 get_serialized_code(std::string &source_code) {
   SerializedCodeExecutionContext ctx;
   try {
-    py::object json = py::module_::import("json");
+    nb::object json = nb::module_::import_("json");
     auto var_dict = get_serializable_var_dict();
-    ctx.scoped_var_dict = py::str(json.attr("dumps")(var_dict));
+    ctx.scoped_var_dict = nb::cast<std::string>(json.attr("dumps")(var_dict));
     ctx.source_code = source_code;
-  } catch (py::error_already_set &e) {
+  } catch (nb::python_error &e) {
     throw std::runtime_error("Failed to serialized data: " +
                              std::string(e.what()));
   }
@@ -37,14 +38,14 @@ get_serialized_code(std::string &source_code) {
 }
 
 static std::string
-get_required_raw_source_code(const int dim, const py::function &func,
+get_required_raw_source_code(const int dim, const nb::callable &func,
                              const std::string &optimizer_var_name) {
   // Get source code and remove the leading whitespace
   std::string source_code = get_source_code(func);
 
   // Form the Python call to optimizer.optimize
   std::ostringstream os;
-  auto obj_func_name = func.attr("__name__").cast<std::string>();
+  auto obj_func_name = nb::cast<std::string>(func.attr("__name__"));
   os << "energy, params_at_energy = " << optimizer_var_name << ".optimize("
      << dim << ", " << obj_func_name << ")\n";
   // The _json_request_result dictionary is a special dictionary where outputs
@@ -58,22 +59,22 @@ get_required_raw_source_code(const int dim, const py::function &func,
 }
 
 /// @brief Bind the `cudaq::optimization_result` typedef.
-void bindOptimizationResult(py::module &mod) {
-  py::class_<optimization_result>(mod, "OptimizationResult");
+void bindOptimizationResult(nb::module_ &mod) {
+  nb::class_<optimization_result>(mod, "OptimizationResult");
 }
 
-void bindGradientStrategies(py::module &mod) {
+void bindGradientStrategies(nb::module_ &mod) {
   // Binding under the `cudaq.gradients` namespace in python.
   auto gradients_submodule = mod.def_submodule("gradients");
   // Have to bind the parent class, `cudaq::gradient`, to allow
   // for the passing of arbitrary `cudaq::gradients::` around.
   // Note: this class lives under `cudaq.gradients.gradient`
   // in python.
-  py::class_<gradient>(gradients_submodule, "gradient");
+  nb::class_<gradient>(gradients_submodule, "gradient");
   // Gradient strategies derive from the `cudaq::gradient` class.
-  py::class_<gradients::central_difference, gradient>(gradients_submodule,
+  nb::class_<gradients::central_difference, gradient>(gradients_submodule,
                                                       "CentralDifference")
-      .def(py::init<>())
+      .def(nb::init<>())
       .def(
           "to_json",
           [](const gradients::central_difference &p) { return json(p).dump(); },
@@ -89,18 +90,18 @@ void bindGradientStrategies(py::module &mod) {
       .def(
           "compute",
           [](cudaq::gradient &grad, const std::vector<double> &x,
-             py::function &func, double funcAtX) {
+             nb::callable &func, double funcAtX) {
             auto function =
-                func.cast<std::function<double(std::vector<double>)>>();
+                nb::cast<std::function<double(std::vector<double>)>>(func);
             return grad.compute(x, function, funcAtX);
           },
-          py::arg("parameter_vector"), py::arg("function"), py::arg("funcAtX"),
+          nb::arg("parameter_vector"), nb::arg("function"), nb::arg("funcAtX"),
           "Compute the gradient of the provided `parameter_vector` with "
           "respect to "
           "its loss function, using the `CentralDifference` method.\n");
-  py::class_<gradients::forward_difference, gradient>(gradients_submodule,
+  nb::class_<gradients::forward_difference, gradient>(gradients_submodule,
                                                       "ForwardDifference")
-      .def(py::init<>())
+      .def(nb::init<>())
       .def(
           "to_json",
           [](const gradients::forward_difference &p) { return json(p).dump(); },
@@ -116,18 +117,18 @@ void bindGradientStrategies(py::module &mod) {
       .def(
           "compute",
           [](cudaq::gradient &grad, const std::vector<double> &x,
-             py::function &func, double funcAtX) {
+             nb::callable &func, double funcAtX) {
             auto function =
-                func.cast<std::function<double(std::vector<double>)>>();
+                nb::cast<std::function<double(std::vector<double>)>>(func);
             return grad.compute(x, function, funcAtX);
           },
-          py::arg("parameter_vector"), py::arg("function"), py::arg("funcAtX"),
+          nb::arg("parameter_vector"), nb::arg("function"), nb::arg("funcAtX"),
           "Compute the gradient of the provided `parameter_vector` with "
           "respect to "
           "its loss function, using the `ForwardDifference` method.\n");
-  py::class_<gradients::parameter_shift, gradient>(gradients_submodule,
+  nb::class_<gradients::parameter_shift, gradient>(gradients_submodule,
                                                    "ParameterShift")
-      .def(py::init<>())
+      .def(nb::init<>())
       .def(
           "to_json",
           [](const gradients::parameter_shift &p) { return json(p).dump(); },
@@ -143,12 +144,12 @@ void bindGradientStrategies(py::module &mod) {
       .def(
           "compute",
           [](cudaq::gradient &grad, const std::vector<double> &x,
-             py::function &func, double funcAtX) {
+             nb::callable &func, double funcAtX) {
             auto function =
-                func.cast<std::function<double(std::vector<double>)>>();
+                nb::cast<std::function<double(std::vector<double>)>>(func);
             return grad.compute(x, function, funcAtX);
           },
-          py::arg("parameter_vector"), py::arg("function"), py::arg("funcAtX"),
+          nb::arg("parameter_vector"), nb::arg("function"), nb::arg("funcAtX"),
           "Compute the gradient of the provided `parameter_vector` with "
           "respect to "
           "its loss function, using the `ParameterShift` method.\n");
@@ -159,9 +160,9 @@ void bindGradientStrategies(py::module &mod) {
 /// Can now define its member functions on
 /// that submodule.
 template <typename OptimizerT>
-py::class_<OptimizerT> addPyOptimizer(py::module &mod, std::string &&name) {
-  return py::class_<OptimizerT, optimizer>(mod, name.c_str())
-      .def(py::init<>())
+nb::class_<OptimizerT, optimizer> addPyOptimizer(nb::module_ &mod, std::string &&name) {
+  return nb::class_<OptimizerT, optimizer>(mod, name.c_str())
+      .def(nb::init<>())
       .def(
           "to_json", [](const OptimizerT &p) { return json(p).dump(); },
           "Convert optimizer to JSON string")
@@ -173,26 +174,26 @@ py::class_<OptimizerT> addPyOptimizer(py::module &mod, std::string &&name) {
             return p;
           },
           "Convert JSON string to optimizer")
-      .def_readwrite("max_iterations", &OptimizerT::max_eval,
+      .def_rw("max_iterations", &OptimizerT::max_eval,
                      "Set the maximum number of optimizer iterations.")
-      .def_readwrite("initial_parameters", &OptimizerT::initial_parameters,
+      .def_rw("initial_parameters", &OptimizerT::initial_parameters,
                      "Set the initial parameter values for the optimization.")
-      .def_readwrite(
+      .def_rw(
           "lower_bounds", &OptimizerT::lower_bounds,
           "Set the lower value bound for the optimization parameters.")
-      .def_readwrite(
+      .def_rw(
           "upper_bounds", &OptimizerT::upper_bounds,
           "Set the upper value bound for the optimization parameters.")
       .def("requires_gradients", &OptimizerT::requiresGradients,
            "Returns whether the optimizer requires gradient.")
       .def(
           "optimize",
-          [](OptimizerT &opt, const int dim, py::function &func) {
+          [](OptimizerT &opt, const int dim, nb::callable &func) {
             auto &platform = cudaq::get_platform();
             if (platform.get_remote_capabilities().serializedCodeExec &&
                 platform.num_qpus() == 1) {
               std::string optimizer_var_name =
-                  cudaq::get_var_name_for_handle(py::cast(&opt));
+                  cudaq::get_var_name_for_handle(nb::cast(&opt));
               if (optimizer_var_name.empty())
                 throw std::runtime_error(
                     "Unable to find desired optimizer object in any "
@@ -208,7 +209,7 @@ py::class_<OptimizerT> addPyOptimizer(py::module &mod, std::string &&name) {
                   get_serialized_code(combined_code);
 
               platform.launchSerializedCodeExecution(
-                  func.attr("__name__").cast<std::string>(),
+                  nb::cast<std::string>(func.attr("__name__")),
                   serialized_code_execution_object);
 
               platform.reset_exec_ctx();
@@ -223,15 +224,15 @@ py::class_<OptimizerT> addPyOptimizer(py::module &mod, std::string &&name) {
               // Call the function.
               auto ret = func(x);
               // Does it return a tuple?
-              auto isTupleReturn = py::isinstance<py::tuple>(ret);
+              auto isTupleReturn = nb::isinstance<nb::tuple>(ret);
               // If we don't need gradients, and it does, just grab the value
               // and return.
               if (!opt.requiresGradients() && isTupleReturn)
-                return ret.cast<py::tuple>()[0].cast<double>();
+                return nb::cast<double>(nb::cast<nb::tuple>(ret)[0]);
               // If we don't need gradients and it doesn't return tuple, then
               // just pass what we got.
               if (!opt.requiresGradients() && !isTupleReturn)
-                return ret.cast<double>();
+                return nb::cast<double>(ret);
 
               // Throw an error if we need gradients and they weren't provided.
               if (opt.requiresGradients() && !isTupleReturn)
@@ -240,24 +241,24 @@ py::class_<OptimizerT> addPyOptimizer(py::module &mod, std::string &&name) {
                     "(float,list[float]) for gradient-based optimizers");
 
               // If here, we require gradients, and the signature is right.
-              auto tuple = ret.cast<py::tuple>();
+              auto tuple = nb::cast<nb::tuple>(ret);
               auto val = tuple[0];
-              auto gradIn = tuple[1].cast<py::list>();
-              for (std::size_t i = 0; i < gradIn.size(); i++)
-                grad[i] = gradIn[i].cast<double>();
+              auto gradIn = nb::cast<nb::list>(tuple[1]);
+              for (std::size_t i = 0; i < nb::len(gradIn); i++)
+                grad[i] = nb::cast<double>(gradIn[i]);
 
-              return val.cast<double>();
+              return nb::cast<double>(val);
             });
           },
-          py::arg("dimensions"), py::arg("function"),
+          nb::arg("dimensions"), nb::arg("function"),
           "Run `cudaq.optimize()` on the provided objective function.");
 }
 
-void bindOptimizers(py::module &mod) {
+void bindOptimizers(nb::module_ &mod) {
   // Binding the `cudaq::optimizers` class to `_pycudaq` as a submodule
   // so it's accessible directly in the cudaq namespace.
   auto optimizers_submodule = mod.def_submodule("optimizers");
-  py::class_<optimizer>(optimizers_submodule, "optimizer");
+  nb::class_<optimizer>(optimizers_submodule, "optimizer");
 
   addPyOptimizer<optimizers::cobyla>(optimizers_submodule, "COBYLA");
   addPyOptimizer<optimizers::neldermead>(optimizers_submodule, "NelderMead");
@@ -267,26 +268,26 @@ void bindOptimizers(py::module &mod) {
 
   // Have to bind extra optimizer parameters to the following manually:
   auto py_spsa = addPyOptimizer<optimizers::spsa>(optimizers_submodule, "SPSA");
-  py_spsa.def_readwrite("gamma", &cudaq::optimizers::spsa::gamma,
+  py_spsa.def_rw("gamma", &cudaq::optimizers::spsa::gamma,
                         "Set the value of gamma for the spsa optimizer.");
-  py_spsa.def_readwrite("step_size", &cudaq::optimizers::spsa::eval_step_size,
+  py_spsa.def_rw("step_size", &cudaq::optimizers::spsa::eval_step_size,
                         "Set the step size for the spsa optimizer.");
 
   auto py_adam = addPyOptimizer<optimizers::adam>(optimizers_submodule, "Adam");
-  py_adam.def_readwrite("batch_size", &cudaq::optimizers::adam::batch_size, "");
-  py_adam.def_readwrite("beta1", &cudaq::optimizers::adam::beta1, "");
-  py_adam.def_readwrite("beta2", &cudaq::optimizers::adam::beta2, "");
-  py_adam.def_readwrite("episodes", &cudaq::optimizers::adam::eps, "");
-  py_adam.def_readwrite("step_size", &cudaq::optimizers::adam::step_size, "");
-  py_adam.def_readwrite("f_tol", &cudaq::optimizers::adam::f_tol, "");
+  py_adam.def_rw("batch_size", &cudaq::optimizers::adam::batch_size, "");
+  py_adam.def_rw("beta1", &cudaq::optimizers::adam::beta1, "");
+  py_adam.def_rw("beta2", &cudaq::optimizers::adam::beta2, "");
+  py_adam.def_rw("episodes", &cudaq::optimizers::adam::eps, "");
+  py_adam.def_rw("step_size", &cudaq::optimizers::adam::step_size, "");
+  py_adam.def_rw("f_tol", &cudaq::optimizers::adam::f_tol, "");
 
   auto py_sgd = addPyOptimizer<optimizers::sgd>(optimizers_submodule, "SGD");
-  py_sgd.def_readwrite("batch_size", &cudaq::optimizers::sgd::batch_size, "");
-  py_sgd.def_readwrite("step_size", &cudaq::optimizers::sgd::step_size, "");
-  py_sgd.def_readwrite("f_tol", &cudaq::optimizers::sgd::f_tol, "");
+  py_sgd.def_rw("batch_size", &cudaq::optimizers::sgd::batch_size, "");
+  py_sgd.def_rw("step_size", &cudaq::optimizers::sgd::step_size, "");
+  py_sgd.def_rw("f_tol", &cudaq::optimizers::sgd::f_tol, "");
 }
 
-void bindOptimizerWrapper(py::module &mod) {
+void bindOptimizerWrapper(nb::module_ &mod) {
   bindOptimizationResult(mod);
   bindGradientStrategies(mod);
   bindOptimizers(mod);

@@ -6,8 +6,9 @@
  * the terms of the Apache License 2.0 which accompanies this distribution.    *
  ******************************************************************************/
 
-#include <pybind11/operators.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/operators.h>
 
 #include "py_SampleResult.h"
 
@@ -17,12 +18,12 @@
 
 namespace cudaq {
 
-void bindMeasureCounts(py::module &mod) {
+void bindMeasureCounts(nb::module_ &mod) {
   using namespace cudaq;
 
   // TODO Bind the variants of this functions that take the register name
   // as input.
-  py::class_<sample_result>(
+  nb::class_<sample_result>(
       mod, "SampleResult",
       R"#(A data-type containing the results of a call to :func:`sample`. 
 This includes all measurement counts data from both mid-circuit and 
@@ -36,8 +37,8 @@ Note:
 Attributes:
 	register_names (List[str]): A list of the names of each measurement 
 		register that are stored in `self`.)#")
-      .def_property_readonly("register_names", &sample_result::register_names)
-      .def(py::init<>())
+      .def_prop_ro("register_names", &sample_result::register_names)
+      .def(nb::init<>())
       .def(
           "dump", [](sample_result &self) { self.dump(); },
           "Print a string of the raw measurement counts data to the "
@@ -64,12 +65,12 @@ Attributes:
             auto map = self.to_map();
             auto iter = map.find(bitstring);
             if (iter == map.end())
-              throw py::key_error("bitstring '" + bitstring +
-                                  "' does not exist");
+              throw nb::key_error(("bitstring '" + bitstring +
+                                  "' does not exist").c_str());
 
             return iter->second;
           },
-          py::arg("bitstring"),
+          nb::arg("bitstring"),
           R"#(Return the measurement counts for the given `bitstring`.
 
 Args:
@@ -85,12 +86,16 @@ Returns:
       .def(
           "__iter__",
           [](sample_result &self) {
-            return py::make_key_iterator(self.begin(), self.end());
+            auto map = self.to_map();
+            std::vector<std::string> keys;
+            for (const auto &pair : map) {
+              keys.push_back(pair.first);
+            }
+            return nb::cast(keys);
           },
-          py::keep_alive<0, 1>(),
           "Iterate through the :class:`SampleResult` dictionary.\n")
       .def("expectation", &sample_result::expectation,
-           py::arg("register_name") = GlobalRegisterName,
+           nb::arg("register_name") = GlobalRegisterName,
            "Return the expectation value in the Z-basis of the :class:`Kernel` "
            "that was sampled.\n")
       .def(
@@ -103,12 +108,12 @@ Returns:
                          1);
             return self.expectation();
           },
-          py::arg("register_name") = GlobalRegisterName,
+          nb::arg("register_name") = GlobalRegisterName,
           "Return the expectation value in the Z-basis of the :class:`Kernel` "
           "that was sampled.\n")
       .def("probability", &sample_result::probability,
            "Return the probability of observing the given bit string.\n",
-           py::arg("bitstring"), py::arg("register_name") = GlobalRegisterName,
+           nb::arg("bitstring"), nb::arg("register_name") = GlobalRegisterName,
            R"#(Return the probability of measuring the given `bitstring`.
 
 Args:
@@ -124,7 +129,7 @@ Returns:
 	to the proportion of the total times the bitstring was measured 
 	vs. the number of experiments (`shots_count`).)#")
       .def("most_probable", &sample_result::most_probable,
-           py::arg("register_name") = GlobalRegisterName,
+           nb::arg("register_name") = GlobalRegisterName,
            R"#(Return the bitstring that was measured most frequently in the 
 experiment.
 
@@ -135,8 +140,8 @@ Args:
 
 Returns:
   str: The most frequently measured binary string during the experiment.)#")
-      .def("count", &sample_result::count, py::arg("bitstring"),
-           py::arg("register_name") = GlobalRegisterName,
+      .def("count", &sample_result::count, nb::arg("bitstring"),
+           nb::arg("register_name") = GlobalRegisterName,
            R"#(Return the number of times the given bitstring was observed.
 
 Args:
@@ -150,8 +155,8 @@ Returns:
            static_cast<sample_result (sample_result::*)(
                const std::vector<std::size_t> &, const std::string_view) const>(
                &sample_result::get_marginal),
-           py::arg("marginal_indices"), py::kw_only(),
-           py::arg("register_name") = GlobalRegisterName,
+           nb::arg("marginal_indices"), nb::kw_only(),
+           nb::arg("register_name") = GlobalRegisterName,
            R"#(Extract the measurement counts data for the provided subset of 
 qubits (`marginal_indices`).
 
@@ -164,7 +169,7 @@ Returns:
   :class:`SampleResult`: 
 	A new `SampleResult` dictionary containing the extracted measurement data.)#")
       .def("get_sequential_data", &sample_result::sequential_data,
-           py::arg("register_name") = GlobalRegisterName,
+           nb::arg("register_name") = GlobalRegisterName,
            "Return the data from the given register (`register_name`) as it "
            "was collected sequentially. A list of measurement results, not "
            "collated into a map.\n")
@@ -175,26 +180,34 @@ Returns:
             ExecutionResult res(cd);
             return sample_result(res);
           },
-          py::arg("register_name"),
+          nb::arg("register_name"),
           "Extract the provided sub-register (`register_name`) as a new "
           ":class:`SampleResult`.\n")
       .def(
           "items",
           [](sample_result &self) {
-            return py::make_iterator(self.begin(), self.end());
+            auto map = self.to_map();
+            std::vector<std::pair<std::string, std::size_t>> items;
+            for (const auto &pair : map) {
+              items.push_back(pair);
+            }
+            return nb::cast(items);
           },
-          py::keep_alive<0, 1>(),
           "Return the key/value pairs in this :class:`SampleResult` "
           "dictionary.\n")
       .def(
           "values",
           [](sample_result &self) {
-            return py::make_value_iterator(self.begin(), self.end());
+            auto map = self.to_map();
+            std::vector<std::size_t> values;
+            for (const auto &pair : map) {
+              values.push_back(pair.second);
+            }
+            return nb::cast(values);
           },
-          py::keep_alive<0, 1>(),
           "Return all values (the counts) in this :class:`SampleResult` "
           "dictionary.\n")
-      .def(py::self += py::self)
+      .def(nb::self += nb::self)
       .def("clear", &sample_result::clear,
            "Clear out all metadata from `self`.\n");
 }

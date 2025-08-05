@@ -7,10 +7,12 @@
  ******************************************************************************/
 
 #include <complex>
-#include <pybind11/complex.h>
-#include <pybind11/numpy.h>
-#include <pybind11/operators.h>
-#include <pybind11/stl.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/operators.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/set.h>
 
 #include "cudaq/operators.h"
 #include "cudaq/operators/serialization.h"
@@ -19,7 +21,7 @@
 
 namespace cudaq {
 
-void bindBosonModule(py::module &mod) {
+void bindBosonModule(nb::module_ &mod) {
   // Binding the functions in `cudaq::boson` as `_pycudaq` submodule
   // so it's accessible directly in the cudaq namespace.
   auto boson_submodule = mod.def_submodule("boson");
@@ -32,31 +34,31 @@ void bindBosonModule(py::module &mod) {
       "Returns product operator with constant value 1.");
   boson_submodule.def(
       "identity", [](std::size_t target) { return boson_op::identity(target); },
-      py::arg("target"),
+      nb::arg("target"),
       "Returns an identity operator on the given target index.");
   boson_submodule.def(
       "identities",
       [](std::size_t first, std::size_t last) {
         return boson_op_term(first, last);
       },
-      py::arg("first"), py::arg("last"),
+      nb::arg("first"), nb::arg("last"),
       "Creates a product operator that applies an identity operation to all "
       "degrees of "
       "freedom in the open range [first, last).");
   boson_submodule.def(
-      "create", &boson_op::create<boson_handler>, py::arg("target"),
+      "create", &boson_op::create<boson_handler>, nb::arg("target"),
       "Returns a bosonic creation operator on the given target index.");
   boson_submodule.def(
-      "annihilate", &boson_op::annihilate<boson_handler>, py::arg("target"),
+      "annihilate", &boson_op::annihilate<boson_handler>, nb::arg("target"),
       "Returns a bosonic annihilation operator on the given target index.");
   boson_submodule.def(
-      "number", &boson_op::number<boson_handler>, py::arg("target"),
+      "number", &boson_op::number<boson_handler>, nb::arg("target"),
       "Returns a bosonic number operator on the given target index.");
   boson_submodule.def(
-      "position", &boson_op::position<boson_handler>, py::arg("target"),
+      "position", &boson_op::position<boson_handler>, nb::arg("target"),
       "Returns a bosonic position operator on the given target index.");
   boson_submodule.def(
-      "momentum", &boson_op::momentum<boson_handler>, py::arg("target"),
+      "momentum", &boson_op::momentum<boson_handler>, nb::arg("target"),
       "Returns a bosonic momentum operator on the given target index.");
   boson_submodule.def(
       "canonicalized",
@@ -90,27 +92,31 @@ void bindBosonModule(py::module &mod) {
       "degrees of freedom.");
 }
 
-void bindBosonOperator(py::module &mod) {
+void bindBosonOperator(nb::module_ &mod) {
 
-  auto boson_op_class = py::class_<boson_op>(mod, "BosonOperator");
+  auto boson_op_class = nb::class_<boson_op>(mod, "BosonOperator");
   auto boson_op_term_class =
-      py::class_<boson_op_term>(mod, "BosonOperatorTerm");
+      nb::class_<boson_op_term>(mod, "BosonOperatorTerm");
 
   boson_op_class
       .def(
           "__iter__",
           [](boson_op &self) {
-            return py::make_iterator(self.begin(), self.end());
+            nb::list items;
+            for (auto it = self.begin(); it != self.end(); ++it) {
+              items.append(*it);
+            }
+            return items;
           },
-          py::keep_alive<0, 1>(), "Loop through each term of the operator.")
+          "Loop through each term of the operator.")
 
       // properties
 
-      .def_property_readonly("parameters",
+      .def_prop_ro("parameters",
                              &boson_op::get_parameter_descriptions,
                              "Returns a dictionary that maps each parameter "
                              "name to its description.")
-      .def_property_readonly("degrees", &boson_op::degrees,
+      .def_prop_ro("degrees", &boson_op::degrees,
                              "Returns a vector that lists all degrees of "
                              "freedom that the operator targets. "
                              "The order of degrees is from smallest to largest "
@@ -122,18 +128,18 @@ void bindBosonOperator(py::module &mod) {
                              "that a state where the qubit with index 0 equals "
                              "1 with probability 1 is given by "
                              "the vector {0., 1., 0., 0.}.")
-      .def_property_readonly("min_degree", &boson_op::min_degree,
+      .def_prop_ro("min_degree", &boson_op::min_degree,
                              "Returns the smallest index of the degrees of "
                              "freedom that the operator targets.")
-      .def_property_readonly("max_degree", &boson_op::max_degree,
+      .def_prop_ro("max_degree", &boson_op::max_degree,
                              "Returns the smallest index of the degrees of "
                              "freedom that the operator targets.")
-      .def_property_readonly("term_count", &boson_op::num_terms,
+      .def_prop_ro("term_count", &boson_op::num_terms,
                              "Returns the number of terms in the operator.")
 
       // constructors
 
-      .def(py::init<>(),
+      .def(nb::init<>(),
            "Creates a default instantiated sum. A default instantiated "
            "sum has no value; it will take a value the first time an "
            "arithmetic operation "
@@ -142,12 +148,12 @@ void bindBosonOperator(py::module &mod) {
            "identity. To construct a `0` value in the mathematical sense "
            "(neutral element "
            "for addition), use `empty()` instead.")
-      .def(py::init<std::size_t>(),
+      .def(nb::init<std::size_t>(),
            "Creates a sum operator with no terms, reserving "
            "space for the given number of terms.")
-      .def(py::init<const boson_op_term &>(),
+      .def(nb::init<const boson_op_term &>(),
            "Creates a sum operator with the given term.")
-      .def(py::init<const boson_op &>(), "Copy constructor.")
+      .def(nb::init<const boson_op &>(), "Copy constructor.")
       .def(
           "copy", [](const boson_op &self) { return boson_op(self); },
           "Creates a copy of the operator.")
@@ -161,9 +167,9 @@ void bindBosonOperator(py::module &mod) {
             auto cmat = self.to_matrix(dimensions, params, invert_order);
             return details::cmat_to_numpy(cmat);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("parameters") = parameter_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("parameters") = parameter_map(),
+          nb::arg("invert_order") = false,
           "Returns the matrix representation of the operator."
           "The matrix is ordered according to the convention (endianness) "
           "used in CUDA-Q, and the ordering returned by `degrees`. This order "
@@ -173,13 +179,13 @@ void bindBosonOperator(py::module &mod) {
       .def(
           "to_matrix",
           [](const boson_op &self, dimension_map &dimensions, bool invert_order,
-             const py::kwargs &kwargs) {
+             const nb::kwargs &kwargs) {
             auto cmat = self.to_matrix(
                 dimensions, details::kwargs_to_param_map(kwargs), invert_order);
             return details::cmat_to_numpy(cmat);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("invert_order") = false, nb::arg("kwargs"),
           "Returns the matrix representation of the operator."
           "The matrix is ordered according to the convention (endianness) "
           "used in CUDA-Q, and the ordering returned by `degrees`. This order "
@@ -192,9 +198,9 @@ void bindBosonOperator(py::module &mod) {
              const parameter_map &params, bool invert_order) {
             return self.to_sparse_matrix(dimensions, params, invert_order);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("parameters") = parameter_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("parameters") = parameter_map(),
+          nb::arg("invert_order") = false,
           "Return the sparse matrix representation of the operator. This "
           "representation is a "
           "`Tuple[list[complex], list[int], list[int]]`, encoding the "
@@ -208,12 +214,12 @@ void bindBosonOperator(py::module &mod) {
       .def(
           "to_sparse_matrix",
           [](const boson_op &self, dimension_map &dimensions, bool invert_order,
-             const py::kwargs &kwargs) {
+             const nb::kwargs &kwargs) {
             return self.to_sparse_matrix(
                 dimensions, details::kwargs_to_param_map(kwargs), invert_order);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("invert_order") = false, nb::arg("kwargs"),
           "Return the sparse matrix representation of the operator. This "
           "representation is a "
           "`Tuple[list[complex], list[int], list[int]]`, encoding the "
@@ -227,7 +233,7 @@ void bindBosonOperator(py::module &mod) {
 
       // comparisons
 
-      .def("__eq__", &boson_op::operator==, py::is_operator(),
+      .def("__eq__", &boson_op::operator==,
            "Return true if the two operators are equivalent. The equivalence "
            "check takes "
            "commutation relations into account. Operators acting on different "
@@ -239,91 +245,91 @@ void bindBosonOperator(py::module &mod) {
           [](const boson_op &self, const boson_op_term &other) {
             return self.num_terms() == 1 && *self.begin() == other;
           },
-          py::is_operator(), "Return true if the two operators are equivalent.")
+          "Return true if the two operators are equivalent.")
 
       // unary operators
 
-      .def(-py::self, py::is_operator())
-      .def(+py::self, py::is_operator())
+      .def(-nb::self)
+      .def(+nb::self)
 
       // in-place arithmetics
 
-      .def(py::self /= int(), py::is_operator())
-      .def(py::self *= int(), py::is_operator())
-      .def(py::self += int(), py::is_operator())
-      .def(py::self -= int(), py::is_operator())
-      .def(py::self /= double(), py::is_operator())
-      .def(py::self *= double(), py::is_operator())
-      .def(py::self += double(), py::is_operator())
-      .def(py::self -= double(), py::is_operator())
-      .def(py::self /= std::complex<double>(), py::is_operator())
-      .def(py::self *= std::complex<double>(), py::is_operator())
-      .def(py::self += std::complex<double>(), py::is_operator())
-      .def(py::self -= std::complex<double>(), py::is_operator())
-      .def(py::self /= scalar_operator(), py::is_operator())
-      .def(py::self *= scalar_operator(), py::is_operator())
-      .def(py::self += scalar_operator(), py::is_operator())
-      .def(py::self -= scalar_operator(), py::is_operator())
-      .def(py::self *= boson_op_term(), py::is_operator())
-      .def(py::self += boson_op_term(), py::is_operator())
-      .def(py::self -= boson_op_term(), py::is_operator())
-      .def(py::self *= py::self, py::is_operator())
-      .def(py::self += py::self, py::is_operator())
+      .def(nb::self /= int())
+      .def(nb::self *= int())
+      .def(nb::self += int())
+      .def(nb::self -= int())
+      .def(nb::self /= double())
+      .def(nb::self *= double())
+      .def(nb::self += double())
+      .def(nb::self -= double())
+      .def(nb::self /= std::complex<double>())
+      .def(nb::self *= std::complex<double>())
+      .def(nb::self += std::complex<double>())
+      .def(nb::self -= std::complex<double>())
+      .def(nb::self /= scalar_operator())
+      .def(nb::self *= scalar_operator())
+      .def(nb::self += scalar_operator())
+      .def(nb::self -= scalar_operator())
+      .def(nb::self *= boson_op_term())
+      .def(nb::self += boson_op_term())
+      .def(nb::self -= boson_op_term())
+      .def(nb::self *= nb::self)
+      .def(nb::self += nb::self)
 // see issue https://github.com/pybind/pybind11/issues/1893
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wself-assign-overloaded"
 #endif
-      .def(py::self -= py::self, py::is_operator())
+      .def(nb::self -= nb::self)
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 
       // right-hand arithmetics
 
-      .def(py::self / int(), py::is_operator())
-      .def(py::self * int(), py::is_operator())
-      .def(py::self + int(), py::is_operator())
-      .def(py::self - int(), py::is_operator())
-      .def(py::self / double(), py::is_operator())
-      .def(py::self * double(), py::is_operator())
-      .def(py::self + double(), py::is_operator())
-      .def(py::self - double(), py::is_operator())
-      .def(py::self / std::complex<double>(), py::is_operator())
-      .def(py::self * std::complex<double>(), py::is_operator())
-      .def(py::self + std::complex<double>(), py::is_operator())
-      .def(py::self - std::complex<double>(), py::is_operator())
-      .def(py::self / scalar_operator(), py::is_operator())
-      .def(py::self * scalar_operator(), py::is_operator())
-      .def(py::self + scalar_operator(), py::is_operator())
-      .def(py::self - scalar_operator(), py::is_operator())
-      .def(py::self * boson_op_term(), py::is_operator())
-      .def(py::self + boson_op_term(), py::is_operator())
-      .def(py::self - boson_op_term(), py::is_operator())
-      .def(py::self * py::self, py::is_operator())
-      .def(py::self + py::self, py::is_operator())
-      .def(py::self - py::self, py::is_operator())
-      .def(py::self * matrix_op_term(), py::is_operator())
-      .def(py::self + matrix_op_term(), py::is_operator())
-      .def(py::self - matrix_op_term(), py::is_operator())
-      .def(py::self * matrix_op(), py::is_operator())
-      .def(py::self + matrix_op(), py::is_operator())
-      .def(py::self - matrix_op(), py::is_operator())
+      .def(nb::self / int())
+      .def(nb::self * int())
+      .def(nb::self + int())
+      .def(nb::self - int())
+      .def(nb::self / double())
+      .def(nb::self * double())
+      .def(nb::self + double())
+      .def(nb::self - double())
+      .def(nb::self / std::complex<double>())
+      .def(nb::self * std::complex<double>())
+      .def(nb::self + std::complex<double>())
+      .def(nb::self - std::complex<double>())
+      .def(nb::self / scalar_operator())
+      .def(nb::self * scalar_operator())
+      .def(nb::self + scalar_operator())
+      .def(nb::self - scalar_operator())
+      .def(nb::self * boson_op_term())
+      .def(nb::self + boson_op_term())
+      .def(nb::self - boson_op_term())
+      .def(nb::self * nb::self)
+      .def(nb::self + nb::self)
+      .def(nb::self - nb::self)
+      .def(nb::self * matrix_op_term())
+      .def(nb::self + matrix_op_term())
+      .def(nb::self - matrix_op_term())
+      .def(nb::self * matrix_op())
+      .def(nb::self + matrix_op())
+      .def(nb::self - matrix_op())
 
       // left-hand arithmetics
 
-      .def(int() * py::self, py::is_operator())
-      .def(int() + py::self, py::is_operator())
-      .def(int() - py::self, py::is_operator())
-      .def(double() * py::self, py::is_operator())
-      .def(double() + py::self, py::is_operator())
-      .def(double() - py::self, py::is_operator())
-      .def(std::complex<double>() * py::self, py::is_operator())
-      .def(std::complex<double>() + py::self, py::is_operator())
-      .def(std::complex<double>() - py::self, py::is_operator())
-      .def(scalar_operator() * py::self, py::is_operator())
-      .def(scalar_operator() + py::self, py::is_operator())
-      .def(scalar_operator() - py::self, py::is_operator())
+      .def(int() * nb::self)
+      .def(int() + nb::self)
+      .def(int() - nb::self)
+      .def(double() * nb::self)
+      .def(double() + nb::self)
+      .def(double() - nb::self)
+      .def(std::complex<double>() * nb::self)
+      .def(std::complex<double>() + nb::self)
+      .def(std::complex<double>() - nb::self)
+      .def(scalar_operator() * nb::self)
+      .def(scalar_operator() + nb::self)
+      .def(scalar_operator() - nb::self)
 
       // common operators
 
@@ -351,17 +357,17 @@ void bindBosonOperator(py::module &mod) {
       .def("dump", &boson_op::dump,
            "Prints the string representation of the operator to the standard "
            "output.")
-      .def("trim", &boson_op::trim, py::arg("tol") = 0.0,
-           py::arg("parameters") = parameter_map(),
+      .def("trim", &boson_op::trim, nb::arg("tol") = 0.0,
+           nb::arg("parameters") = parameter_map(),
            "Removes all terms from the sum for which the absolute value of the "
            "coefficient is below "
            "the given tolerance.")
       .def(
           "trim",
-          [](boson_op &self, double tol, const py::kwargs &kwargs) {
+          [](boson_op &self, double tol, const nb::kwargs &kwargs) {
             return self.trim(tol, details::kwargs_to_param_map(kwargs));
           },
-          py::arg("tol") = 0.0,
+          nb::arg("tol") = 0.0, nb::arg("kwargs"),
           "Removes all terms from the sum for which the absolute value of the "
           "coefficient is below "
           "the given tolerance.")
@@ -386,17 +392,21 @@ void bindBosonOperator(py::module &mod) {
       .def(
           "__iter__",
           [](boson_op_term &self) {
-            return py::make_iterator(self.begin(), self.end());
+            nb::list items;
+            for (auto it = self.begin(); it != self.end(); ++it) {
+              items.append(*it);
+            }
+            return items;
           },
-          py::keep_alive<0, 1>(), "Loop through each term of the operator.")
+          "Loop through each term of the operator.")
 
       // properties
 
-      .def_property_readonly("parameters",
+      .def_prop_ro("parameters",
                              &boson_op_term::get_parameter_descriptions,
                              "Returns a dictionary that maps each parameter "
                              "name to its description.")
-      .def_property_readonly("degrees", &boson_op_term::degrees,
+      .def_prop_ro("degrees", &boson_op_term::degrees,
                              "Returns a vector that lists all degrees of "
                              "freedom that the operator targets. "
                              "The order of degrees is from smallest to largest "
@@ -408,20 +418,20 @@ void bindBosonOperator(py::module &mod) {
                              "that a state where the qubit with index 0 equals "
                              "1 with probability 1 is given by "
                              "the vector {0., 1., 0., 0.}.")
-      .def_property_readonly("min_degree", &boson_op_term::min_degree,
+      .def_prop_ro("min_degree", &boson_op_term::min_degree,
                              "Returns the smallest index of the degrees of "
                              "freedom that the operator targets.")
-      .def_property_readonly("max_degree", &boson_op_term::max_degree,
+      .def_prop_ro("max_degree", &boson_op_term::max_degree,
                              "Returns the smallest index of the degrees of "
                              "freedom that the operator targets.")
-      .def_property_readonly("ops_count", &boson_op_term::num_ops,
+      .def_prop_ro("ops_count", &boson_op_term::num_ops,
                              "Returns the number of operators in the product.")
-      .def_property_readonly(
+      .def_prop_ro(
           "term_id", &boson_op_term::get_term_id,
           "The term id uniquely identifies the operators and targets (degrees) "
           "that they act on, "
           "but does not include information about the coefficient.")
-      .def_property_readonly(
+      .def_prop_ro(
           "coefficient", &boson_op_term::get_coefficient,
           "Returns the unevaluated coefficient of the operator. The "
           "coefficient is a "
@@ -429,30 +439,29 @@ void bindBosonOperator(py::module &mod) {
 
       // constructors
 
-      .def(py::init<>(),
+      .def(nb::init<>(),
            "Creates a product operator with constant value 1. The returned "
            "operator does not target any degrees of freedom but merely "
            "represents a constant.")
-      .def(py::init<std::size_t, std::size_t>(), py::arg("first_degree"),
-           py::arg("last_degree"),
+      .def(nb::init<std::size_t, std::size_t>(), nb::arg("first_degree"),
+           nb::arg("last_degree"),
            "Creates a product operator that applies an identity operation to "
            "all degrees of "
            "freedom in the range [first_degree, last_degree).")
-      .def(py::init<double>(),
+      .def(nb::init<double>(),
            "Creates a product operator with the given constant value. "
            "The returned operator does not target any degrees of freedom.")
-      .def(py::init<std::complex<double>>(),
+      .def(nb::init<std::complex<double>>(),
            "Creates a product operator with the given "
            "constant value. The returned operator does not target any degrees "
            "of freedom.")
-      .def(py::init([](const scalar_operator &scalar) {
-             return boson_op_term() * scalar;
-           }),
-           "Creates a product operator with non-constant scalar value.")
-      .def(py::init<boson_handler>(),
+      .def("__init__", [](boson_op_term *self, const scalar_operator &scalar) {
+        new (self) boson_op_term(boson_op_term() * scalar);
+      }, "Creates a product operator with non-constant scalar value.")
+      .def(nb::init<boson_handler>(),
            "Creates a product operator with the given elementary operator.")
-      .def(py::init<const boson_op_term &, std::size_t>(), py::arg("operator"),
-           py::arg("size") = 0,
+      .def(nb::init<const boson_op_term &, std::size_t>(), nb::arg("operator"),
+           nb::arg("size") = 0,
            "Creates a copy of the given operator and reserves space for "
            "storing the given "
            "number of product terms (if a size is provided).")
@@ -463,7 +472,7 @@ void bindBosonOperator(py::module &mod) {
       // evaluations
 
       .def("evaluate_coefficient", &boson_op_term::evaluate_coefficient,
-           py::arg("parameters") = parameter_map(),
+           nb::arg("parameters") = parameter_map(),
            "Returns the evaluated coefficient of the product operator. The "
            "parameters is a map of parameter names to their concrete, complex "
            "values.")
@@ -474,9 +483,9 @@ void bindBosonOperator(py::module &mod) {
             auto cmat = self.to_matrix(dimensions, params, invert_order);
             return details::cmat_to_numpy(cmat);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("parameters") = parameter_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("parameters") = parameter_map(),
+          nb::arg("invert_order") = false,
           "Returns the matrix representation of the operator."
           "The matrix is ordered according to the convention (endianness) "
           "used in CUDA-Q, and the ordering returned by `degrees`. This order "
@@ -486,13 +495,13 @@ void bindBosonOperator(py::module &mod) {
       .def(
           "to_matrix",
           [](const boson_op_term &self, dimension_map &dimensions,
-             bool invert_order, const py::kwargs &kwargs) {
+             bool invert_order, const nb::kwargs &kwargs) {
             auto cmat = self.to_matrix(
                 dimensions, details::kwargs_to_param_map(kwargs), invert_order);
             return details::cmat_to_numpy(cmat);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("invert_order") = false, nb::arg("kwargs"),
           "Returns the matrix representation of the operator."
           "The matrix is ordered according to the convention (endianness) "
           "used in CUDA-Q, and the ordering returned by `degrees`. This order "
@@ -505,9 +514,9 @@ void bindBosonOperator(py::module &mod) {
              const parameter_map &params, bool invert_order) {
             return self.to_sparse_matrix(dimensions, params, invert_order);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("parameters") = parameter_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("parameters") = parameter_map(),
+          nb::arg("invert_order") = false,
           "Return the sparse matrix representation of the operator. This "
           "representation is a "
           "`Tuple[list[complex], list[int], list[int]]`, encoding the "
@@ -521,12 +530,12 @@ void bindBosonOperator(py::module &mod) {
       .def(
           "to_sparse_matrix",
           [](const boson_op_term &self, dimension_map &dimensions,
-             bool invert_order, const py::kwargs &kwargs) {
+             bool invert_order, const nb::kwargs &kwargs) {
             return self.to_sparse_matrix(
                 dimensions, details::kwargs_to_param_map(kwargs), invert_order);
           },
-          py::arg("dimensions") = dimension_map(),
-          py::arg("invert_order") = false,
+          nb::arg("dimensions") = dimension_map(),
+          nb::arg("invert_order") = false, nb::arg("kwargs"),
           "Return the sparse matrix representation of the operator. This "
           "representation is a "
           "`Tuple[list[complex], list[int], list[int]]`, encoding the "
@@ -540,7 +549,7 @@ void bindBosonOperator(py::module &mod) {
 
       // comparisons
 
-      .def("__eq__", &boson_op_term::operator==, py::is_operator(),
+      .def("__eq__", &boson_op_term::operator==,
            "Return true if the two operators are equivalent. The equivalence "
            "check takes "
            "commutation relations into account. Operators acting on different "
@@ -552,70 +561,70 @@ void bindBosonOperator(py::module &mod) {
           [](const boson_op_term &self, const boson_op &other) {
             return other.num_terms() == 1 && *other.begin() == self;
           },
-          py::is_operator(), "Return true if the two operators are equivalent.")
+          "Return true if the two operators are equivalent.")
 
       // unary operators
 
-      .def(-py::self, py::is_operator())
-      .def(+py::self, py::is_operator())
+      .def(-nb::self)
+      .def(+nb::self)
 
       // in-place arithmetics
 
-      .def(py::self /= int(), py::is_operator())
-      .def(py::self *= int(), py::is_operator())
-      .def(py::self /= double(), py::is_operator())
-      .def(py::self *= double(), py::is_operator())
-      .def(py::self /= std::complex<double>(), py::is_operator())
-      .def(py::self *= std::complex<double>(), py::is_operator())
-      .def(py::self /= scalar_operator(), py::is_operator())
-      .def(py::self *= scalar_operator(), py::is_operator())
-      .def(py::self *= py::self, py::is_operator())
+      .def(nb::self /= int())
+      .def(nb::self *= int())
+      .def(nb::self /= double())
+      .def(nb::self *= double())
+      .def(nb::self /= std::complex<double>())
+      .def(nb::self *= std::complex<double>())
+      .def(nb::self /= scalar_operator())
+      .def(nb::self *= scalar_operator())
+      .def(nb::self *= nb::self)
 
       // right-hand arithmetics
 
-      .def(py::self / int(), py::is_operator())
-      .def(py::self * int(), py::is_operator())
-      .def(py::self + int(), py::is_operator())
-      .def(py::self - int(), py::is_operator())
-      .def(py::self / double(), py::is_operator())
-      .def(py::self * double(), py::is_operator())
-      .def(py::self + double(), py::is_operator())
-      .def(py::self - double(), py::is_operator())
-      .def(py::self / std::complex<double>(), py::is_operator())
-      .def(py::self * std::complex<double>(), py::is_operator())
-      .def(py::self + std::complex<double>(), py::is_operator())
-      .def(py::self - std::complex<double>(), py::is_operator())
-      .def(py::self / scalar_operator(), py::is_operator())
-      .def(py::self * scalar_operator(), py::is_operator())
-      .def(py::self + scalar_operator(), py::is_operator())
-      .def(py::self - scalar_operator(), py::is_operator())
-      .def(py::self * py::self, py::is_operator())
-      .def(py::self + py::self, py::is_operator())
-      .def(py::self - py::self, py::is_operator())
-      .def(py::self * boson_op(), py::is_operator())
-      .def(py::self + boson_op(), py::is_operator())
-      .def(py::self - boson_op(), py::is_operator())
-      .def(py::self * matrix_op_term(), py::is_operator())
-      .def(py::self + matrix_op_term(), py::is_operator())
-      .def(py::self - matrix_op_term(), py::is_operator())
-      .def(py::self * matrix_op(), py::is_operator())
-      .def(py::self + matrix_op(), py::is_operator())
-      .def(py::self - matrix_op(), py::is_operator())
+      .def(nb::self / int())
+      .def(nb::self * int())
+      .def(nb::self + int())
+      .def(nb::self - int())
+      .def(nb::self / double())
+      .def(nb::self * double())
+      .def(nb::self + double())
+      .def(nb::self - double())
+      .def(nb::self / std::complex<double>())
+      .def(nb::self * std::complex<double>())
+      .def(nb::self + std::complex<double>())
+      .def(nb::self - std::complex<double>())
+      .def(nb::self / scalar_operator())
+      .def(nb::self * scalar_operator())
+      .def(nb::self + scalar_operator())
+      .def(nb::self - scalar_operator())
+      .def(nb::self * nb::self)
+      .def(nb::self + nb::self)
+      .def(nb::self - nb::self)
+      .def(nb::self * boson_op())
+      .def(nb::self + boson_op())
+      .def(nb::self - boson_op())
+      .def(nb::self * matrix_op_term())
+      .def(nb::self + matrix_op_term())
+      .def(nb::self - matrix_op_term())
+      .def(nb::self * matrix_op())
+      .def(nb::self + matrix_op())
+      .def(nb::self - matrix_op())
 
       // left-hand arithmetics
 
-      .def(int() * py::self, py::is_operator())
-      .def(int() + py::self, py::is_operator())
-      .def(int() - py::self, py::is_operator())
-      .def(double() * py::self, py::is_operator())
-      .def(double() + py::self, py::is_operator())
-      .def(double() - py::self, py::is_operator())
-      .def(std::complex<double>() * py::self, py::is_operator())
-      .def(std::complex<double>() + py::self, py::is_operator())
-      .def(std::complex<double>() - py::self, py::is_operator())
-      .def(scalar_operator() * py::self, py::is_operator())
-      .def(scalar_operator() + py::self, py::is_operator())
-      .def(scalar_operator() - py::self, py::is_operator())
+      .def(int() * nb::self)
+      .def(int() + nb::self)
+      .def(int() - nb::self)
+      .def(double() * nb::self)
+      .def(double() + nb::self)
+      .def(double() - nb::self)
+      .def(std::complex<double>() * nb::self)
+      .def(std::complex<double>() + nb::self)
+      .def(std::complex<double>() - nb::self)
+      .def(scalar_operator() * nb::self)
+      .def(scalar_operator() + nb::self)
+      .def(scalar_operator() - nb::self)
 
       // general utility functions
 
@@ -645,12 +654,12 @@ void bindBosonOperator(py::module &mod) {
           "of freedom that are not included in the given set.");
 }
 
-void bindBosonWrapper(py::module &mod) {
+void bindBosonWrapper(nb::module_ &mod) {
   bindBosonOperator(mod);
-  py::implicitly_convertible<double, boson_op_term>();
-  py::implicitly_convertible<std::complex<double>, boson_op_term>();
-  py::implicitly_convertible<scalar_operator, boson_op_term>();
-  py::implicitly_convertible<boson_op_term, boson_op>();
+  nb::implicitly_convertible<double, boson_op_term>();
+  nb::implicitly_convertible<std::complex<double>, boson_op_term>();
+  nb::implicitly_convertible<scalar_operator, boson_op_term>();
+  nb::implicitly_convertible<boson_op_term, boson_op>();
   bindBosonModule(mod);
 }
 
