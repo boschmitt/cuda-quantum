@@ -32,6 +32,9 @@ def CCDialect : Dialect {
 
   let cppNamespace = "cudaq::cc";
   let useDefaultTypePrinterParser = 1;
+  let dependentDialects = [
+    "mlir::cf::ControlFlowDialect"
+  ];
 
   let extraClassDeclaration = [{
     /// Register all CC types.

@@ -18,6 +18,7 @@ add_cudaq_dialect_library(CCDialect
 
   LINK_LIBS PUBLIC
     MLIRComplexDialect
+    MLIRControlFlowDialect
     MLIRFuncDialect
     MLIRLLVMDialect
     MLIRIR
