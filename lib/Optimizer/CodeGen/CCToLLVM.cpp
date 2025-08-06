@@ -499,8 +499,6 @@ class SizeOfOpPattern : public ConvertOpToLLVMPattern<cudaq::cc::SizeOfOp> {
 public:
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  // Use the GEP approach for now. LLVM is planning to remove support for this
-  // at some point. See: https://github.com/llvm/llvm-project/issues/71507
   LogicalResult
   matchAndRewrite(cudaq::cc::SizeOfOp sizeOfOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -512,14 +510,12 @@ public:
       return success();
     }
     auto loc = sizeOfOp.getLoc();
-    // TODO: replace this with some target-specific memory layout computation
-    // when we upgrade to a newer MLIR.
-    auto zero = arith::ConstantIntOp::create(rewriter, loc, 0, 64);
-    auto ptrTy =
-        cudaq::cc::PointerType::get(cudaq::cc::ArrayType::get(inputTy));
-    auto nullCast = cudaq::cc::CastOp::create(rewriter, loc, ptrTy, zero);
-    Value nextPtr = cudaq::cc::ComputePtrOp::create(rewriter, loc, ptrTy, nullCast, ArrayRef<cudaq::cc::ComputePtrArg>{1});
-    rewriter.replaceOpWithNewOp<cudaq::cc::CastOp>(sizeOfOp, resultTy, nextPtr);
+    // We rely on MLIR here, they are using the GEP approach for now. LLVM is
+    // planning to remove support for this at some point.
+    // See: https://github.com/llvm/llvm-project/issues/71507 and
+    //      https://github.com/llvm/llvm-project/issues/96047
+    auto sizeOp = getSizeInBytes(loc, inputTy, rewriter);
+    rewriter.replaceOp(sizeOfOp, sizeOp);
     return success();
   }
 };
