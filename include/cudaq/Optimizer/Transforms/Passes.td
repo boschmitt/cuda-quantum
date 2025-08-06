@@ -987,6 +987,7 @@ def QuakeAddDeallocs : Pass<"add-dealloc", "mlir::func::FuncOp"> {
   }];
 
   let constructor = "cudaq::opt::createQuakeAddDeallocs()";
+  let dependentDialects = ["mlir::cf::ControlFlowDialect"];
 }
 
 def QuakeAddMetadata : Pass<"quake-add-metadata", "mlir::func::FuncOp"> {
