@@ -232,7 +232,5 @@ if '--target-option' in sys.argv:
     initKwargs['option'] = sys.argv[sys.argv.index('--target-option') + 1]
 if '--emulate' in sys.argv:
     initKwargs['emulate'] = True
-if not '--cudaq-full-stack-trace' in sys.argv:
-    sys.tracebacklimit = 0
 
 cudaq_runtime.initialize_cudaq(**initKwargs)
