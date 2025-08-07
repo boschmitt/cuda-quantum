@@ -14,7 +14,9 @@
 #include "mlir/Dialect/Complex/IR/Complex.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 
 namespace cudaq {
@@ -36,6 +38,8 @@ inline void registerAllDialects(mlir::DialectRegistry &registry) {
     quake::QuakeDialect
   >();
   // clang-format on
+  mlir::LLVM::registerInlinerInterface(registry);
+  mlir::func::registerInlinerExtension(registry);
 }
 
 } // namespace cudaq
