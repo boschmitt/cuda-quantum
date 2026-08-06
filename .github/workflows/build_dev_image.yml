@@ -1,0 +1,88 @@
+name: Build the dev image
+
+on:
+  workflow_dispatch:
+    inputs:
+      push-image:
+        description: Push image to registry
+        required: true
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - '.github/actions/get-llvm-build'
+      - '.github/workflows/build_dev_image.yml'
+      - '.github/workflows/llvm_bump.yml'
+      - '.github/workflows/scripts/Dockerfile'
+      - 'tpls/llvm'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-image:
+    name: Build image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - cc: clang-15
+            cxx: clang++-15
+          - cc: gcc-11
+            cxx: g++-11
+          - cc: gcc-12
+            cxx: g++-12
+
+    steps:
+      - name: Get CUDA Quantum
+        uses: actions/checkout@v3
+
+      - name: Get LLVM build
+        uses: ./.github/actions/get-llvm-build
+        with:
+          toolchain: ${{ matrix.compiler.cc }}
+          cc: ${{ matrix.compiler.cc }}
+          cxx: ${{ matrix.compiler.cxx }}
+          only-restore: 'false'
+
+      - name: Compress LLVM build
+        run: tar --posix --use-compress-program zstdmt -C tpls/llvm/install/ -cf llvm.tar.tzst llvm/
+
+      - name: Extract metadata
+        id: metadata
+        uses: docker/metadata-action@v4
+        with:
+          images: ghcr.io/${{ github.repository }}-dev
+          flavor: |
+            latest=true
+            prefix=${{ matrix.compiler.cc }}-,onlatest=true
+          tags: |
+            # workflow dispatch is covered by these
+            type=schedule,enable=true,pattern=nightly
+            type=ref,enable=true,event=branch
+            type=ref,enable=true,prefix=${{ matrix.compiler.cc }}-pr-,event=pr
+            type=ref,enable=true,event=tag
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: .github/workflows/docker/Dockerfile
+          build-args: toolchain=${{ matrix.compiler.cxx }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' || inputs.push-image == true }}
+

@@ -1,0 +1,64 @@
+name: 'Get LLVM build'
+description: 'Either restore LLVM from cache or build it'
+
+inputs:
+  toolchain:
+    description: 'Toolchain name and version (e.g., gcc-11 and clang-15)'
+    required: true
+  cc:
+    description: 'C compiler executable'
+    required: true
+  cxx:
+    description: 'C++ compiler executable'
+    required: true
+  only-restore:
+    description: 'Indicates whether LLVM should be built if a cache entry is not found'
+    default: 'true'
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get LLVM build identifier
+      id: get-llvm-build-id
+      uses: ./.github/actions/get-llvm-build-id
+      with:
+        toolchain: ${{ inputs.toolchain }}
+
+    - name: Try to restoring LLVM from cache
+      id: restore-llvm-cache
+      uses: actions/cache/restore@v3
+      with:
+        fail-on-cache-miss: ${{ inputs.only-restore == 'true' }}
+        path: tpls/llvm/install/llvm/
+        key: ${{ steps.get-llvm-build-id.outputs.id }}
+
+    - name: Set up CCache
+      if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        max-size: 500M
+        variant: sccache
+        append-timestamp: false
+        key: llvm-${{ runner.os }}-${{ inputs.toolchain }}
+        save: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Build LLVM
+      if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+      env:
+        llvm-build-script: .github/actions/get-llvm-build/build_llvm.sh
+      run: bash ${{ env.llvm-build-script }} Release ${{ inputs.cc }} ${{ inputs.cxx }} sccache
+      shell: bash
+
+    - name: Store cache key
+      if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+      run: echo "${{ steps.restore-llvm-cache.outputs.cache-primary-key }}" > tpls/llvm/install/llvm/cache-key
+      shell: bash
+
+    - name: Store LLVM build in the cache
+      if: steps.restore-llvm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v3
+      with:
+        path: tpls/llvm/install/llvm/
+        key: ${{ steps.restore-llvm-cache.outputs.cache-primary-key }}
+

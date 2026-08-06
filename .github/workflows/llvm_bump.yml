@@ -1,0 +1,80 @@
+name: LLVM bump
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/llvm_bump.yml'
+      - '.github/actions/get-llvm-build'
+      - 'tpls/llvm'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-build:
+    name: Linux build
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    permissions:
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - cc: clang-15
+            cxx: clang++-15
+            build-type: Debug
+          - cc: gcc-11
+            cxx: g++-11
+            build-type: Release
+          - cc: gcc-12
+            cxx: g++-12
+            build-type: Release
+
+    steps:
+      - name: Install requirements
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends software-properties-common gpg gpg-agent
+          add-apt-repository ppa:apt-fast/stable
+          apt-get install -y --no-install-recommends apt-fast
+          apt-fast install -y --no-install-recommends git gh cmake ninja-build ${{ matrix.compiler.cxx }} lld-15 curl libblas-dev zstd python3 python3-pip libpython3-dev
+          ln -s /usr/bin/ld.lld-15 /usr/bin/ld.lld
+
+      - name: Get code
+        uses: actions/checkout@v3
+
+      - name: Set git safe
+        run: git config --global --add safe.directory $PWD
+
+      - name: Get LLVM build
+        uses: ./.github/actions/get-llvm-build
+        with:
+          toolchain: ${{ matrix.compiler.cc }}
+          cc: ${{ matrix.compiler.cc }}
+          cxx: ${{ matrix.compiler.cxx }}
+          only-restore: 'false'
+
+      - name: Check formatting
+        uses: ./.github/actions/check-formatting
+        with:
+          llvm-prefix: tpls/llvm/install/llvm
+
+      - name: Install python requirements
+        run: pip install numpy pytest lit
+
+      - name: Build
+        uses: ./.github/actions/build-cudaq
+        with:
+          cc: ${{ matrix.compiler.cc }}
+          cxx: ${{ matrix.compiler.cxx }}
+          build-type: ${{ matrix.compiler.build-type }}
+          llvm-prefix: tpls/llvm/install/llvm
+
+      - name: Run tests
+        run: ctest --output-on-failure --test-dir build
+

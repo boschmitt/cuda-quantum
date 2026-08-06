@@ -1,0 +1,63 @@
+name: 'Build CUDA Quantum'
+description: 'Build CUDA Quantum using CCache'
+
+inputs:
+  cc:
+    description: 'C compiler executable'
+    required: true
+  cxx:
+    description: 'C++ compiler executable'
+    required: true
+  build-type:
+    description: 'Build type (e.g., Debug, Release)'
+    required: true
+  llvm-prefix:
+    description: 'LLVM installation prefix'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: CCache key
+      id: ccache-key
+      run: |
+        echo "base_key=cudaq-${{ runner.os }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.build-type }}" >> $GITHUB_OUTPUT
+        if [ ${{ github.ref }} != 'refs/heads/main' ]; then
+          echo "pr_key=-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Apt-get update
+      run: apt-get update
+      shell: bash
+
+    - name: Set up CCache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        append-timestamp: false
+        key: ${{ steps.ccache-key.outputs.base_key }}${{ steps.ccache-key.outputs.pr_key }}
+        restore-keys: ${{ steps.ccache-key.outputs.base_key }}
+
+    - name: Build
+      run: .github/actions/build-cudaq/build_cudaq.sh ${{ inputs.llvm-prefix }} ${{ inputs.build-type }} ${{ inputs.cc }} ${{ inputs.cxx }} ccache
+      shell: bash
+
+    # We need to remove any previous cache entry so that CCache can write a new
+    # cache entry for this build
+    - name: Cleanup cache
+      if: ${{ github.ref == 'refs/heads/main' }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        apt-get install -y --no-install-recommends gh
+        gh extension install actions/gh-actions-cache
+
+        REPO=${{ github.repository }}
+        BRANCH=${{ github.ref }}
+        KEYS=$(gh actions-cache list --key ccache-${{ steps.ccache-key.outputs.base_key }} -R $REPO -B $BRANCH | cut -f 1 )
+
+        for key in $KEYS
+        do
+          gh actions-cache delete $key -R ${{ github.repository }} -B $BRANCH --confirm
+        done
+      shell: bash
